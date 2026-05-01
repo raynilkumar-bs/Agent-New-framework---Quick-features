@@ -1,0 +1,50 @@
+/**
+ * Design tokens v1 — extracted from global theme + repeating app-shell / L2 values.
+ * Loaded via src/main.tsx: import(`./themes/${DESIGN_VERSION}/tokens.css`).
+ */
+
+:root {
+  /* Brand (also aligned with src/styles/theme.css --primary) */
+  --token-brand: #2552ed;
+  --token-primary-light: #1e44cc;
+  --token-primary-dark: #2952e3;
+
+  /* App shell (L1 strip + main chrome) */
+  --token-app-shell-bg: #e0e5eb;
+  --token-l1-rail-bg: #e0e5eb;
+  --token-l1-icon-radius: 10px;
+
+  /* L2 column */
+  --token-l2-panel-bg: #f0f1f5;
+  --token-l2-border: #e5e9f0;
+  --token-l2-width: 220px;
+
+  /* Typography (repeating arbitrary sizes in components) */
+  --token-font-size-xs: 12px;
+  --token-font-size-sm: 13px;
+  --token-font-size-md: 14px;
+  --token-font-size-heading: 15px;
+
+  /* Radius (modals / controls beyond --radius in theme.css) */
+  --token-radius-control: 8px;
+  --token-radius-modal: 12px;
+
+  /* Text */
+  --token-text-primary: #212121;
+  --token-text-secondary: #555555;
+  --token-text-muted: #888888;
+
+  /* Focus / shadow */
+  --token-shadow-focus: 0 0 0 2px rgba(25, 118, 210, 0.08);
+}
+
+.dark {
+  --token-app-shell-bg: #13161b;
+  --token-l1-rail-bg: #181b22;
+  --token-l2-panel-bg: #1e2229;
+  --token-l2-border: #2e3340;
+  --token-text-primary: #e4e4e4;
+  --token-text-secondary: #9ba2b0;
+  --token-text-muted: #6b7280;
+  --token-shadow-focus: 0 0 0 2px rgba(37, 82, 237, 0.2);
+}

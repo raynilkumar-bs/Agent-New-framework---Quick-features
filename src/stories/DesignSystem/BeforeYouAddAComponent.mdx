@@ -1,0 +1,33 @@
+import { Meta } from '@storybook/blocks';
+
+<Meta title="Design System/Before you add a component" />
+
+# Before you add a component
+
+## Why this page exists
+
+Before you add a new **UI primitive** or a **Storybook** entry under **UI/**, compare with what already lives in Storybook and in `src/app/components/ui/`. Two different names for the same job (for example another “drawer” that is really a **Sheet**) makes the design system harder to use.
+
+## Checklist
+
+1. **Intent** — What user-facing job does this do? (Example: “slide-over settings panel.”)
+2. **Search** — Open **Design System**, **UI/**, **App/**, and **Content /** in the sidebar; search the codebase for similar names (**Panel**, **Sheet**, **Dialog**, etc.).
+3. **Closest match** — Note the existing component file and story path.
+4. **Decide (pick one)**
+   - **Extend** — Add props or variants to the existing primitive.
+   - **Compose** — New feature component that only uses existing primitives.
+   - **Replace** — Deprecate the old story or component (needs team agreement).
+   - **New primitive** — Only when nothing fits; explain **why** in the story description.
+5. **Story `title`** — Keep the hierarchy: **Design System/**, **UI/**, **App/**, **Content /** — no ad hoc top-level synonyms for the same pattern.
+
+## Slide-over side panels
+
+For desktop-style floating rails, use **Sheet** with `inset="floating"` and `floatingSize` (**sm**, **md**, **lg**, **xl**). Demos live under **UI/Sheet**. New floating sheets should prefer **`FloatingSheetFrame`** (`@/app/components/layout/FloatingSheetFrame`) and set **`SheetContent`** `className` to include **`FLOATING_SHEET_FRAME_CONTENT_CLASS`** so edging, scroll-only body, and sticky footer CTAs stay consistent.
+
+## Icons (Lucide stroke)
+
+Product outline icons use **`L1_STRIP_ICON_STROKE_PX`** (1.4px) from `src/app/components/l1StripIconTokens.ts`. On Lucide, set `strokeWidth={L1_STRIP_ICON_STROKE_PX}` and add **`absoluteStrokeWidth`** when the rendered size is not the default 24px. Do not treat Recharts `strokeWidth` or generated SVG under `src/imports/` as icon strokes. See **Design System → Tokens → Icon stroke** in Storybook.
+
+## Automation
+
+Contributors using Cursor should follow the workspace rule **storybook-new-component** when adding or editing files under `src/stories/` or `src/app/components/ui/`.

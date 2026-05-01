@@ -1,0 +1,2 @@
+/* v2: override deltas only; base inherits v1 until v2 visuals diverge */
+@import "../v1/tokens.css";
