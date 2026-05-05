@@ -36,6 +36,17 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/app/components/ui/dropdown-menu";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/app/components/ui/popover";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/app/components/ui/sheet";
 import { FunnelSimple } from "@phosphor-icons/react";
 import { FilterPanel, type FilterItem } from "./FilterPanel";
 import { AgentOutcomesView } from "./AgentOutcomesView";
@@ -56,9 +67,37 @@ interface Agent {
   avgResponseTime: string;
   timeSaved: string;
   locations: number;
+  locationNames: string[];
 }
 
 // ─── Mock data ────────────────────────────────────────────────────────────────
+
+const LOCATION_POOL = [
+  "Dallas",
+  "Austin Downtown",
+  "Houston Galleria",
+  "San Antonio North",
+  "Plano Legacy West",
+  "Frisco Stonebriar",
+  "Fort Worth Sundance",
+  "El Paso Westside",
+  "Arlington Highlands",
+  "Irving Las Colinas",
+  "McKinney Gateway",
+  "Lubbock South",
+  "Amarillo East",
+  "Corpus Christi Bay",
+  "Galveston Seawall",
+  "Round Rock Tech",
+  "Sugar Land Town Square",
+  "The Woodlands Market",
+  "Katy Mills",
+  "Pearland Pkwy",
+];
+
+function generateLocations(count: number): string[] {
+  return Array.from({ length: count }, (_, i) => LOCATION_POOL[i % LOCATION_POOL.length]);
+}
 
 const MOCK_AGENTS: Agent[] = [
   {
@@ -71,6 +110,7 @@ const MOCK_AGENTS: Agent[] = [
     avgResponseTime: "20m",
     timeSaved: "4h 20m",
     locations: 500,
+    locationNames: generateLocations(500),
   },
   {
     id: "a2",
@@ -82,6 +122,7 @@ const MOCK_AGENTS: Agent[] = [
     avgResponseTime: "5m",
     timeSaved: "1h 10m",
     locations: 250,
+    locationNames: generateLocations(250),
   },
   {
     id: "a3",
@@ -93,6 +134,7 @@ const MOCK_AGENTS: Agent[] = [
     avgResponseTime: "10m",
     timeSaved: "45m",
     locations: 200,
+    locationNames: generateLocations(200),
   },
   {
     id: "a4",
@@ -104,6 +146,7 @@ const MOCK_AGENTS: Agent[] = [
     avgResponseTime: "2m",
     timeSaved: "3h 20m",
     locations: 100,
+    locationNames: generateLocations(100),
   },
 ];
 
@@ -201,6 +244,112 @@ function MetricCard({ label, value, trend, positive = true, customize = false }:
         </button>
       )}
     </div>
+  );
+}
+
+// ─── Locations cell ───────────────────────────────────────────────────────────
+
+function LocationsCell({ count, locations }: { count: number; locations: string[] }) {
+  const [popoverOpen, setPopoverOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const top5 = locations.slice(0, 5);
+  const filtered = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return locations;
+    return locations.filter((n) => n.toLowerCase().includes(q));
+  }, [locations, searchQuery]);
+
+  const handleViewMore = () => {
+    setPopoverOpen(false);
+    setDrawerOpen(true);
+  };
+
+  return (
+    <>
+      <Popover open={popoverOpen} onOpenChange={setPopoverOpen}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            className="flex items-center gap-1 text-[14px] text-[#212121] transition-colors hover:text-[#1976d2] dark:text-[#e4e4e4] dark:hover:text-[#60a5fa]"
+          >
+            {count}
+            <ChevronDown className="h-3.5 w-3.5" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
+          align="end"
+          sideOffset={8}
+          collisionPadding={24}
+          className="w-[280px] rounded-[8px] border border-[#e5e9f0] bg-white p-0 shadow-[0_8px_24px_-4px_rgba(16,24,40,0.12),0_2px_6px_-2px_rgba(16,24,40,0.08)] dark:border-[#252b35] dark:bg-[#1e2229]"
+        >
+          <div className="border-b border-[#eaeaea] px-4 py-3 text-[13px] font-medium text-[#212121] dark:border-[#252b35] dark:text-[#f3f4f6]">
+            Locations
+          </div>
+          <ul className="py-1">
+            {top5.map((name, i) => (
+              <li
+                key={i}
+                className="truncate px-4 py-2 text-[14px] text-[#374151] dark:text-[#e4e4e4]"
+                title={name}
+              >
+                {name}
+              </li>
+            ))}
+          </ul>
+          <div className="border-t border-[#eaeaea] dark:border-[#252b35]">
+            <button
+              type="button"
+              onClick={handleViewMore}
+              className="block w-full px-4 py-2.5 text-left text-[13px] font-medium text-[#1976d2] transition-colors hover:bg-[#f8fafc] dark:text-[#60a5fa] dark:hover:bg-[#181c24]"
+            >
+              View more
+            </button>
+          </div>
+        </PopoverContent>
+      </Popover>
+
+      <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
+        <SheetContent
+          side="right"
+          className="flex w-[520px] flex-col gap-0 p-0 sm:max-w-[520px] dark:bg-[#1e2229]"
+        >
+          <SheetHeader className="py-4 pl-6 pr-4">
+            <SheetTitle className="text-[16px] text-[#212121] dark:text-[#f3f4f6]">
+              View locations
+            </SheetTitle>
+          </SheetHeader>
+          <div className="border-b border-[#eaeaea] py-3 pl-6 pr-4 dark:border-[#252b35]">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#9ba2b0]" />
+              <Input
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search locations"
+                className="h-9 pl-9"
+              />
+            </div>
+          </div>
+          <ul className="flex-1 overflow-y-auto pl-6 pr-4">
+            {filtered.length === 0 ? (
+              <li className="py-12 text-center text-[14px] text-[#9ba2b0]">
+                No locations found.
+              </li>
+            ) : (
+              filtered.map((name, i) => (
+                <li
+                  key={i}
+                  className="border-b border-[#f0f2f5] py-3 text-[14px] text-[#374151] last:border-b-0 dark:border-[#252b35] dark:text-[#e4e4e4]"
+                >
+                  {name}
+                </li>
+              ))
+            )}
+          </ul>
+        </SheetContent>
+      </Sheet>
+    </>
   );
 }
 
@@ -652,13 +801,7 @@ export function ReviewResponseAgentsView() {
                       {agent.timeSaved}
                     </TableCell>
                     <TableCell className="h-[72px] px-5 py-5">
-                      <button
-                        type="button"
-                        className="flex items-center gap-1 text-[14px] text-[#212121] transition-colors hover:text-[#1976d2] dark:text-[#e4e4e4] dark:hover:text-[#60a5fa]"
-                      >
-                        {agent.locations}
-                        <ChevronDown className="h-3.5 w-3.5" />
-                      </button>
+                      <LocationsCell count={agent.locations} locations={agent.locationNames} />
                     </TableCell>
                     <TableCell className="h-[72px] px-5 py-5 text-right">
                       <DropdownMenu>

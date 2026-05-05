@@ -6,7 +6,12 @@
       "mcp__claude_ai_Figma__get_design_context",
       "mcp__claude_ai_Figma__get_screenshot",
       "Read(//tmp/**)",
-      "Read(//private/tmp/**)"
+      "Read(//private/tmp/**)",
+      "Bash(curl -s -o /tmp/figma_context_data.png \"https://www.figma.com/api/mcp/asset/8485692c-cde9-41b9-8995-cc56d3896cae\")",
+      "Bash(curl -s -o /tmp/figma_knowledge.png \"https://www.figma.com/api/mcp/asset/d9a9af41-6b36-4c69-8a6f-7fa986c596d2\")",
+      "Bash(curl -s -o /tmp/figma_brand.png \"https://www.figma.com/api/mcp/asset/30c8f18e-5997-4a43-b5ed-09b9ef9a9106\")",
+      "Bash(curl -s -o /tmp/figma_industry.png \"https://www.figma.com/api/mcp/asset/232767fe-0164-4645-95a1-57f202851130\")",
+      "Bash(awk -F: '$1<=300')"
     ]
   }
 }

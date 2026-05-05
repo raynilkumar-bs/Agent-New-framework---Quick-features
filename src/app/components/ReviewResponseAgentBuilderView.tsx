@@ -1,4 +1,4 @@
-import { Fragment, useState, type DragEvent as ReactDragEvent } from "react";
+import { Fragment, useEffect, useRef, useState, type DragEvent as ReactDragEvent } from "react";
 import {
   ArrowLeft,
   CloudUpload,
@@ -39,6 +39,8 @@ import {
   Command,
   ExternalLink,
   Check,
+  Undo2,
+  Redo2,
 } from "lucide-react";
 import { Button } from "@/app/components/ui/button";
 import { Input } from "@/app/components/ui/input";
@@ -68,6 +70,8 @@ import {
   PROMPT_INPUT_PRIMARY_ICON_SEND_CLASSNAME,
 } from "@/app/components/ui/prompt-input";
 import { useRequestChromeless } from "@/app/context/ChromeContext";
+import { ContextPickerDialog } from "@/app/components/ContextPickerDialog";
+import { BranchConfigPanel } from "@/app/components/BranchConfigPanel";
 
 interface Props {
   onBack: () => void;
@@ -161,6 +165,8 @@ const TRIGGER_OPTIONS: TriggerSourceOption[] = [
 const TRIGGER_DRAG_MIME = "application/x-aero-trigger";
 const TASK_DRAG_MIME = "application/x-aero-task";
 const TASK_REORDER_MIME = "application/x-aero-task-reorder";
+const BRANCH_DRAG_MIME = "application/x-aero-branch";
+const NODE_REORDER_MIME = "application/x-aero-node-reorder";
 
 function popoutSectionLabel(label: string): string {
   return label.replace(/\s+(event|task)$/i, "").trim();
@@ -177,6 +183,7 @@ interface PlacedTrigger {
 interface PlacedTask {
   /** Stable id for selection / array updates. */
   id: string;
+  kind: "task";
   subId: string;
   label: string;
   description: string;
@@ -184,10 +191,41 @@ interface PlacedTask {
   enabled: boolean;
 }
 
+interface BranchCondition {
+  id: string;
+  variable: string;
+  operator: string;
+  value: string;
+}
+
+interface BranchLane {
+  id: string;
+  name: string;
+  /** The auto-added "No conditions met" lane — always last, always present, only the name is editable. */
+  isDefault: boolean;
+  conditions: BranchCondition[];
+  /** Length is conditions.length - 1; conditions[i] {connector} conditions[i+1]. */
+  connectors: ("AND" | "OR")[];
+  nodes: WorkflowNode[];
+}
+
+interface PlacedBranch {
+  id: string;
+  kind: "branch";
+  label: string;
+  description: string;
+  branchType: string;
+  enabled: boolean;
+  lanes: BranchLane[];
+}
+
+type WorkflowNode = PlacedTask | PlacedBranch;
+
 type CanvasSelection =
   | { kind: "agent" }
   | { kind: "trigger" }
   | { kind: "task"; taskId: string }
+  | { kind: "branch"; branchId: string }
   | null;
 
 interface TaskSubOption {
@@ -286,7 +324,94 @@ export function ReviewResponseAgentBuilderView({ onBack }: Props) {
   const [placedTrigger, setPlacedTrigger] = useState<PlacedTrigger | null>(null);
   const [triggerName, setTriggerName] = useState("");
   const [triggerDescription, setTriggerDescription] = useState("");
-  const [placedTasks, setPlacedTasks] = useState<PlacedTask[]>([]);
+  const [placedNodes, setPlacedNodes] = useState<WorkflowNode[]>([]);
+
+  type WorkflowSnapshot = {
+    title: string;
+    triggerName: string;
+    triggerDescription: string;
+    placedTrigger: PlacedTrigger | null;
+    placedNodes: WorkflowNode[];
+  };
+  const [history, setHistory] = useState<{ stack: WorkflowSnapshot[]; index: number }>(() => ({
+    stack: [{ title, triggerName, triggerDescription, placedTrigger, placedNodes }],
+    index: 0,
+  }));
+  const applyingHistoryRef = useRef(false);
+
+  useEffect(() => {
+    if (applyingHistoryRef.current) {
+      applyingHistoryRef.current = false;
+      return;
+    }
+    const next: WorkflowSnapshot = { title, triggerName, triggerDescription, placedTrigger, placedNodes };
+    const timer = window.setTimeout(() => {
+      setHistory((h) => {
+        const cur = h.stack[h.index];
+        if (
+          cur.title === next.title &&
+          cur.triggerName === next.triggerName &&
+          cur.triggerDescription === next.triggerDescription &&
+          JSON.stringify(cur.placedTrigger) === JSON.stringify(next.placedTrigger) &&
+          JSON.stringify(cur.placedNodes) === JSON.stringify(next.placedNodes)
+        ) {
+          return h;
+        }
+        const trimmed = h.stack.slice(0, h.index + 1);
+        trimmed.push(next);
+        return { stack: trimmed, index: trimmed.length - 1 };
+      });
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [title, triggerName, triggerDescription, placedTrigger, placedNodes]);
+
+  const applySnapshot = (snap: WorkflowSnapshot) => {
+    applyingHistoryRef.current = true;
+    setTitle(snap.title);
+    setTriggerName(snap.triggerName);
+    setTriggerDescription(snap.triggerDescription);
+    setPlacedTrigger(snap.placedTrigger);
+    setPlacedNodes(snap.placedNodes);
+  };
+
+  const canUndo = history.index > 0;
+  const canRedo = history.index < history.stack.length - 1;
+
+  const handleUndo = () => {
+    if (!canUndo) return;
+    const nextIndex = history.index - 1;
+    applySnapshot(history.stack[nextIndex]);
+    setHistory((h) => ({ ...h, index: nextIndex }));
+  };
+
+  const handleRedo = () => {
+    if (!canRedo) return;
+    const nextIndex = history.index + 1;
+    applySnapshot(history.stack[nextIndex]);
+    setHistory((h) => ({ ...h, index: nextIndex }));
+  };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod) return;
+      const target = e.target as HTMLElement | null;
+      const isEditable =
+        target?.tagName === "INPUT" ||
+        target?.tagName === "TEXTAREA" ||
+        target?.isContentEditable;
+      if (isEditable) return;
+      if (e.key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        handleUndo();
+      } else if ((e.key === "z" && e.shiftKey) || e.key === "y") {
+        e.preventDefault();
+        handleRedo();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
 
   const handleStartFromScratch = () => {
     setCreating(true);
@@ -325,39 +450,171 @@ export function ReviewResponseAgentBuilderView({ onBack }: Props) {
     setTriggerDescription(sub.description);
   };
 
-  /** Insert a new task at the given position (defaults to end). */
+  // ── Tree helpers ──────────────────────────────────────────────────────
+  // The workflow is a forest: a top-level array of nodes plus, for each
+  // BranchNode, one nested forest per lane. These helpers walk the tree
+  // immutably, returning a new top-level array with the requested change.
+
+  const mapNodes = (
+    nodes: WorkflowNode[],
+    fn: (n: WorkflowNode, parent: WorkflowNode[]) => WorkflowNode | null,
+  ): WorkflowNode[] => {
+    const out: WorkflowNode[] = [];
+    for (const n of nodes) {
+      const replaced = fn(n, nodes);
+      if (replaced === null) continue;
+      if (replaced.kind === "branch") {
+        out.push({
+          ...replaced,
+          lanes: replaced.lanes.map((lane) => ({
+            ...lane,
+            nodes: mapNodes(lane.nodes, fn),
+          })),
+        });
+      } else {
+        out.push(replaced);
+      }
+    }
+    return out;
+  };
+
+  const findNode = (nodes: WorkflowNode[], id: string): WorkflowNode | null => {
+    for (const n of nodes) {
+      if (n.id === id) return n;
+      if (n.kind === "branch") {
+        for (const lane of n.lanes) {
+          const found = findNode(lane.nodes, id);
+          if (found) return found;
+        }
+      }
+    }
+    return null;
+  };
+
+  const insertIntoLane = (
+    nodes: WorkflowNode[],
+    laneId: string,
+    atIndex: number,
+    inserted: WorkflowNode,
+  ): WorkflowNode[] =>
+    nodes.map((n) => {
+      if (n.kind !== "branch") return n;
+      const lanes = n.lanes.map((lane) => {
+        if (lane.id !== laneId) {
+          return { ...lane, nodes: insertIntoLane(lane.nodes, laneId, atIndex, inserted) };
+        }
+        const copy = lane.nodes.slice();
+        const safeIndex = Math.min(Math.max(atIndex, 0), copy.length);
+        copy.splice(safeIndex, 0, inserted);
+        return { ...lane, nodes: copy };
+      });
+      return { ...n, lanes };
+    });
+
+  const removeNode = (nodes: WorkflowNode[], id: string): WorkflowNode[] =>
+    mapNodes(nodes, (n) => (n.id === id ? null : n));
+
+  /** Insert a new task at the given position in the top-level flow (defaults to end). */
   const handlePlaceTask = (sub: TaskSubOption, atIndex?: number) => {
     const id = `task-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const next: PlacedTask = {
       id,
+      kind: "task",
       subId: sub.id,
       label: sub.label,
       description: sub.description,
       prompt: sub.systemPrompt ?? "",
       enabled: true,
     };
-    setPlacedTasks((tasks) => {
-      const insertAt = typeof atIndex === "number" ? atIndex : tasks.length;
-      const copy = tasks.slice();
+    setPlacedNodes((nodes) => {
+      const insertAt = typeof atIndex === "number" ? atIndex : nodes.length;
+      const copy = nodes.slice();
       copy.splice(insertAt, 0, next);
       return copy;
     });
     setSelection({ kind: "task", taskId: id });
   };
 
+  /** Insert a new task inside a specific branch lane at the given index. */
+  const handlePlaceTaskInLane = (sub: TaskSubOption, laneId: string, atIndex: number) => {
+    const id = `task-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const next: PlacedTask = {
+      id,
+      kind: "task",
+      subId: sub.id,
+      label: sub.label,
+      description: sub.description,
+      prompt: sub.systemPrompt ?? "",
+      enabled: true,
+    };
+    setPlacedNodes((nodes) => insertIntoLane(nodes, laneId, atIndex, next));
+    setSelection({ kind: "task", taskId: id });
+  };
+
+  /** Insert a new branch (with one user lane + a default lane) at the top level. */
+  const handlePlaceBranch = (atIndex?: number, laneId?: string) => {
+    const branchId = `branch-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const userLaneId = `lane-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const defaultLaneId = `lane-${Date.now() + 1}-${Math.random().toString(36).slice(2, 7)}`;
+    const next: PlacedBranch = {
+      id: branchId,
+      kind: "branch",
+      label: "Branch",
+      description: "Build condition-specific flows",
+      branchType: "condition",
+      enabled: true,
+      lanes: [
+        {
+          id: userLaneId,
+          name: "",
+          isDefault: false,
+          conditions: [{ id: `cond-${Date.now()}`, variable: "", operator: "is equal to", value: "" }],
+          connectors: [],
+          nodes: [],
+        },
+        {
+          id: defaultLaneId,
+          name: "",
+          isDefault: true,
+          conditions: [],
+          connectors: [],
+          nodes: [],
+        },
+      ],
+    };
+    if (laneId) {
+      setPlacedNodes((nodes) => insertIntoLane(nodes, laneId, atIndex ?? 0, next));
+    } else {
+      setPlacedNodes((nodes) => {
+        const insertAt = typeof atIndex === "number" ? atIndex : nodes.length;
+        const copy = nodes.slice();
+        copy.splice(insertAt, 0, next);
+        return copy;
+      });
+    }
+    setSelection({ kind: "branch", branchId });
+  };
+
   const updateTask = (taskId: string, patch: Partial<PlacedTask>) => {
-    setPlacedTasks((tasks) =>
-      tasks.map((t) => (t.id === taskId ? { ...t, ...patch } : t)),
+    setPlacedNodes((nodes) =>
+      mapNodes(nodes, (n) => (n.kind === "task" && n.id === taskId ? { ...n, ...patch } : n)),
+    );
+  };
+
+  const updateBranch = (branchId: string, patch: Partial<PlacedBranch>) => {
+    setPlacedNodes((nodes) =>
+      mapNodes(nodes, (n) =>
+        n.kind === "branch" && n.id === branchId ? { ...n, ...patch } : n,
+      ),
     );
   };
 
   const handleReorderTask = (taskId: string, toIndex: number) => {
-    setPlacedTasks((tasks) => {
-      const fromIndex = tasks.findIndex((t) => t.id === taskId);
-      if (fromIndex === -1) return tasks;
-      const next = tasks.slice();
+    setPlacedNodes((nodes) => {
+      const fromIndex = nodes.findIndex((t) => t.id === taskId);
+      if (fromIndex === -1) return nodes;
+      const next = nodes.slice();
       const [moved] = next.splice(fromIndex, 1);
-      // Removing the item shifts later indices left by one.
       const adjusted = toIndex > fromIndex ? toIndex - 1 : toIndex;
       next.splice(adjusted, 0, moved);
       return next;
@@ -366,7 +623,18 @@ export function ReviewResponseAgentBuilderView({ onBack }: Props) {
 
   const selectedTask =
     selection?.kind === "task"
-      ? placedTasks.find((t) => t.id === selection.taskId) ?? null
+      ? (() => {
+          const n = findNode(placedNodes, selection.taskId);
+          return n && n.kind === "task" ? n : null;
+        })()
+      : null;
+
+  const selectedBranch =
+    selection?.kind === "branch"
+      ? (() => {
+          const n = findNode(placedNodes, selection.branchId);
+          return n && n.kind === "branch" ? n : null;
+        })()
       : null;
 
   return (
@@ -530,13 +798,23 @@ export function ReviewResponseAgentBuilderView({ onBack }: Props) {
               placedTrigger={placedTrigger}
               onTriggerSelect={() => setSelection({ kind: "trigger" })}
               onPlaceTrigger={handlePlaceTrigger}
-              placedTasks={placedTasks}
+              placedNodes={placedNodes}
               onTaskEnabledChange={(taskId, enabled) =>
                 updateTask(taskId, { enabled })
               }
               onTaskSelect={(taskId) => setSelection({ kind: "task", taskId })}
+              onBranchSelect={(branchId) => setSelection({ kind: "branch", branchId })}
+              onBranchEnabledChange={(branchId, enabled) =>
+                updateBranch(branchId, { enabled })
+              }
               onPlaceTask={handlePlaceTask}
+              onPlaceTaskInLane={handlePlaceTaskInLane}
+              onPlaceBranch={handlePlaceBranch}
               onReorderTask={handleReorderTask}
+              canUndo={canUndo}
+              canRedo={canRedo}
+              onUndo={handleUndo}
+              onRedo={handleRedo}
             />
           ) : (
           <div className="relative z-10 flex flex-1 flex-col items-center justify-center px-8 py-12 animate-in fade-in duration-300">
@@ -609,6 +887,46 @@ export function ReviewResponseAgentBuilderView({ onBack }: Props) {
             }
             prompt={selectedTask.prompt}
             onPromptChange={(prompt) => updateTask(selectedTask.id, { prompt })}
+            onClose={() => setSelection(null)}
+          />
+        ) : creating && selectedBranch ? (
+          <BranchConfigPanel
+            key={`branch-${selectedBranch.id}`}
+            draft={{
+              branchType: selectedBranch.branchType,
+              lanes: selectedBranch.lanes.map((l) => ({
+                id: l.id,
+                name: l.name,
+                isDefault: l.isDefault,
+                conditions: l.conditions.map((c) => ({ ...c })),
+                connectors: l.connectors.slice(),
+              })),
+            }}
+            onSave={(next) => {
+              setPlacedNodes((nodes) =>
+                mapNodes(nodes, (n) =>
+                  n.kind === "branch" && n.id === selectedBranch.id
+                    ? {
+                        ...n,
+                        branchType: next.branchType,
+                        // Preserve nested workflow nodes inside lanes by id; new lanes get empty arrays.
+                        lanes: next.lanes.map((nl) => {
+                          const existing = n.lanes.find((el) => el.id === nl.id);
+                          return {
+                            id: nl.id,
+                            name: nl.name,
+                            isDefault: nl.isDefault,
+                            conditions: nl.conditions,
+                            connectors: nl.connectors,
+                            nodes: existing?.nodes ?? [],
+                          };
+                        }),
+                      }
+                    : n,
+                ),
+              );
+              setSelection(null);
+            }}
             onClose={() => setSelection(null)}
           />
         ) : creating && selection?.kind === "trigger" && placedTrigger ? (
@@ -718,12 +1036,79 @@ function ManualBuilderContent({
             <AccordionTrigger className="rounded-md px-3 py-2 text-sm font-medium text-[#212121] hover:bg-[#f4f6f7] dark:text-[#f3f4f6] dark:hover:bg-[#262b35]">
               Controls
             </AccordionTrigger>
-            <AccordionContent className="px-3 pb-1 pt-1 text-xs text-[#6b7280] dark:text-[#9ba2b0]">
-              No controls yet.
+            <AccordionContent className="overflow-visible pb-1 pt-1">
+              <div className="flex flex-col gap-1.5">
+                <ControlRow
+                  index={0}
+                  label="Branch"
+                  Icon={GitBranch}
+                  mime={BRANCH_DRAG_MIME}
+                  payload="branch"
+                />
+              </div>
             </AccordionContent>
           </AccordionItem>
         </Accordion>
       </div>
+    </div>
+  );
+}
+
+interface ControlRowProps {
+  index: number;
+  label: string;
+  Icon: typeof Clock;
+  mime: string;
+  payload: string;
+}
+
+/** A draggable Controls-section row (Branch, Delay, etc.) — mime + payload picked by the canvas. */
+function ControlRow({ index, label, Icon, mime, payload }: ControlRowProps) {
+  const [dragging, setDragging] = useState(false);
+
+  const handleDragStart = (e: ReactDragEvent<HTMLDivElement>) => {
+    e.dataTransfer.setData(mime, payload);
+    e.dataTransfer.effectAllowed = "copy";
+    const ghost = document.createElement("div");
+    ghost.textContent = label;
+    ghost.style.cssText = [
+      "position:fixed",
+      "top:-9999px",
+      "left:-9999px",
+      "padding:8px 12px",
+      "background:#ffffff",
+      "color:#212121",
+      "font:500 13px/18px Roboto, sans-serif",
+      "border-radius:8px",
+      "box-shadow:0 8px 24px rgba(15,23,42,0.18)",
+      "border:1px solid #c4d5e9",
+      "max-width:280px",
+      "white-space:nowrap",
+      "overflow:hidden",
+      "text-overflow:ellipsis",
+      "pointer-events:none",
+    ].join(";");
+    document.body.appendChild(ghost);
+    e.dataTransfer.setDragImage(ghost, 16, 16);
+    window.setTimeout(() => {
+      if (ghost.parentNode) ghost.parentNode.removeChild(ghost);
+    }, 0);
+    setDragging(true);
+  };
+
+  return (
+    <div
+      draggable
+      onDragStart={handleDragStart}
+      onDragEnd={() => setDragging(false)}
+      style={{ animationDelay: `${index * 30}ms` }}
+      className={`group flex h-9 items-center gap-2 rounded-md border border-[#e5e9f0] bg-white px-3 text-sm text-[#212121] transition-[background-color,border-color,opacity,transform] duration-200 ease-out animate-in fade-in slide-in-from-left-2 duration-300 fill-mode-backwards hover:border-transparent hover:bg-[#E5E9F0] dark:border-[#333a47] dark:bg-[#262b35] dark:text-[#e4e4e4] dark:hover:bg-[#2c333f] cursor-grab active:cursor-grabbing ${
+        dragging ? "opacity-60" : ""
+      }`}
+    >
+      <Icon className="h-4 w-4 shrink-0 text-[#6b7280] dark:text-[#9ba2b0]" />
+      <span className="flex-1 truncate text-left">{label}</span>
+      <GripVertical className="h-4 w-4 shrink-0 text-[#9ca3af] dark:text-[#6b7280]" />
     </div>
   );
 }
@@ -1033,16 +1418,24 @@ interface WorkflowCanvasProps {
   placedTrigger: PlacedTrigger | null;
   onTriggerSelect: () => void;
   onPlaceTrigger: (sub: TriggerSubOption) => void;
-  placedTasks: PlacedTask[];
+  placedNodes: WorkflowNode[];
   onTaskEnabledChange: (taskId: string, enabled: boolean) => void;
   onTaskSelect: (taskId: string) => void;
+  onBranchSelect: (branchId: string) => void;
+  onBranchEnabledChange: (branchId: string, enabled: boolean) => void;
   onPlaceTask: (sub: TaskSubOption, atIndex?: number) => void;
+  onPlaceTaskInLane: (sub: TaskSubOption, laneId: string, atIndex: number) => void;
+  onPlaceBranch: (atIndex?: number, laneId?: string) => void;
   onReorderTask: (taskId: string, toIndex: number) => void;
+  canUndo: boolean;
+  canRedo: boolean;
+  onUndo: () => void;
+  onRedo: () => void;
 }
 
 const CARD_WIDTH = "w-[360px]";
 
-type DragKind = "trigger" | "task" | "task-reorder" | null;
+type DragKind = "trigger" | "task" | "task-reorder" | "branch" | null;
 
 function readDragKind(types: ReadonlyArray<string> | DOMStringList): DragKind {
   const has = (mime: string) => {
@@ -1052,21 +1445,30 @@ function readDragKind(types: ReadonlyArray<string> | DOMStringList): DragKind {
   if (has(TRIGGER_DRAG_MIME)) return "trigger";
   if (has(TASK_REORDER_MIME)) return "task-reorder";
   if (has(TASK_DRAG_MIME)) return "task";
+  if (has(BRANCH_DRAG_MIME)) return "branch";
   return null;
 }
 
 function WorkflowCanvas({
-  agentName,
   selection,
   onSelectAgent,
   placedTrigger,
   onTriggerSelect,
   onPlaceTrigger,
-  placedTasks,
+  placedNodes,
   onTaskEnabledChange,
   onTaskSelect,
+  onBranchSelect,
+  onBranchEnabledChange,
   onPlaceTask,
+  onPlaceTaskInLane,
+  onPlaceBranch,
   onReorderTask,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo,
+  agentName,
 }: WorkflowCanvasProps) {
   const agentSelected = selection?.kind === "agent";
   const triggerSelected = selection?.kind === "trigger";
@@ -1149,6 +1551,11 @@ function WorkflowCanvas({
       onReorderTask(reorderId, atIndex);
       return;
     }
+    const branchSubId = e.dataTransfer.getData(BRANCH_DRAG_MIME);
+    if (branchSubId) {
+      onPlaceBranch(atIndex);
+      return;
+    }
     const subId = e.dataTransfer.getData(TASK_DRAG_MIME);
     const inSubs = TASK_OPTIONS.flatMap((t) => t.subOptions ?? []).find(
       (s) => s.id === subId,
@@ -1162,43 +1569,368 @@ function WorkflowCanvas({
       );
   };
 
+  const handleLaneDrop = (laneId: string, atIndex: number) => (e: ReactDragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setActiveDrag(null);
+    const branchSubId = e.dataTransfer.getData(BRANCH_DRAG_MIME);
+    if (branchSubId) {
+      onPlaceBranch(atIndex, laneId);
+      return;
+    }
+    const subId = e.dataTransfer.getData(TASK_DRAG_MIME);
+    const inSubs = TASK_OPTIONS.flatMap((t) => t.subOptions ?? []).find(
+      (s) => s.id === subId,
+    );
+    const direct = TASK_OPTIONS.find((t) => t.id === subId && !t.subOptions);
+    if (inSubs) onPlaceTaskInLane(inSubs, laneId, atIndex);
+    else if (direct)
+      onPlaceTaskInLane(
+        { id: direct.id, label: direct.label, description: "" },
+        laneId,
+        atIndex,
+      );
+  };
+
+  // ── Pan & zoom ────────────────────────────────────────────────────────
+  const MIN_ZOOM = 0.25;
+  const MAX_ZOOM = 2;
+  const ZOOM_PRESETS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2];
+
+  const outerRef = useRef<HTMLDivElement | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  // panX is the user's horizontal offset *from the auto-centered baseline*.
+  // The content is positioned with `left: 50% + translateX(-50%)` (CSS), so panX = 0
+  // always means horizontally centered in the canvas — exactly like the toolbar.
+  // panY is absolute: 80 = 80px from the canvas top.
+  const [viewport, setViewport] = useState<{ panX: number; panY: number; zoom: number }>({
+    panX: 0,
+    panY: 80,
+    zoom: 1,
+  });
+  const [zoomMenuOpen, setZoomMenuOpen] = useState(false);
+  const [spacePan, setSpacePan] = useState(false);
+  const [transitioning, setTransitioning] = useState(false);
+  const transitionTimerRef = useRef<number | null>(null);
+  const panDragRef = useRef<{ startX: number; startY: number; pan0X: number; pan0Y: number } | null>(null);
+
+  // No JS-driven horizontal centering needed — CSS does it via `left: 50% + translateX(-50%)`.
+  // The workflow stays centered between LHS and RHS automatically as either panel opens/closes
+  // or the window resizes, exactly like the toolbar's `inset-x-0 + flex justify-center`.
+
+  // Spacebar: hold to enable cursor-grab pan from anywhere.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code === "Space") {
+        const t = e.target as HTMLElement | null;
+        if (t?.tagName === "INPUT" || t?.tagName === "TEXTAREA" || t?.isContentEditable) return;
+        e.preventDefault();
+        setSpacePan(true);
+      }
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code === "Space") setSpacePan(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, []);
+
+  // Wheel: plain wheel = pan, ⌘/Ctrl + wheel = zoom around cursor.
+  useEffect(() => {
+    const outer = outerRef.current;
+    if (!outer) return;
+    const onWheel = (e: WheelEvent) => {
+      stopTransition();
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        const rect = outer.getBoundingClientRect();
+        // panX is relative to canvas-center horizontally, so cursor X must be too.
+        const cx = e.clientX - rect.left - rect.width / 2;
+        const cy = e.clientY - rect.top;
+        setViewport((v) => {
+          const factor = Math.exp(-e.deltaY * 0.0015);
+          const nextZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, v.zoom * factor));
+          const ratio = nextZoom / v.zoom;
+          return {
+            zoom: nextZoom,
+            panX: cx - (cx - v.panX) * ratio,
+            panY: cy - (cy - v.panY) * ratio,
+          };
+        });
+      } else {
+        e.preventDefault();
+        setViewport((v) => ({ ...v, panX: v.panX - e.deltaX, panY: v.panY - e.deltaY }));
+      }
+    };
+    outer.addEventListener("wheel", onWheel, { passive: false });
+    return () => outer.removeEventListener("wheel", onWheel);
+  }, []);
+
+  // Mouse drag pan: start when mousedown lands on the canvas background (not on a draggable card / button).
+  const handleCanvasMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    const t = e.target as HTMLElement;
+    const onInteractive = !!t.closest('[draggable="true"], button, input, select, textarea, [role="button"]');
+    // When spacebar is held, force pan even if mousedown is on interactive content.
+    if (onInteractive && !spacePan) return;
+    e.preventDefault();
+    stopTransition();
+    panDragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      pan0X: viewport.panX,
+      pan0Y: viewport.panY,
+    };
+    const onMove = (ev: MouseEvent) => {
+      if (!panDragRef.current) return;
+      setViewport((v) => ({
+        ...v,
+        panX: panDragRef.current!.pan0X + (ev.clientX - panDragRef.current!.startX),
+        panY: panDragRef.current!.pan0Y + (ev.clientY - panDragRef.current!.startY),
+      }));
+    };
+    const onUp = () => {
+      panDragRef.current = null;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
+  const setZoomAroundCenter = (nextZoom: number) => {
+    const outer = outerRef.current;
+    if (!outer) {
+      setViewport((v) => ({ ...v, zoom: nextZoom }));
+      return;
+    }
+    const rect = outer.getBoundingClientRect();
+    // Anchor at canvas center: cx-relative = 0 (panX is already center-relative), cy = canvasH/2.
+    const cy = rect.height / 2;
+    setViewport((v) => {
+      const ratio = nextZoom / v.zoom;
+      return {
+        zoom: nextZoom,
+        panX: v.panX * ratio,
+        panY: cy - (cy - v.panY) * ratio,
+      };
+    });
+  };
+
+  const fitToView = () => {
+    const outer = outerRef.current;
+    const content = contentRef.current;
+    if (!outer || !content) return;
+    const oRect = outer.getBoundingClientRect();
+    // Measure the content at scale 1 (subtract current zoom from the rect).
+    const cRect = content.getBoundingClientRect();
+    const naturalW = cRect.width / viewport.zoom;
+    const naturalH = cRect.height / viewport.zoom;
+    if (naturalW === 0 || naturalH === 0) return;
+    const padding = 80;
+    const fitZoom = Math.min(
+      MAX_ZOOM,
+      Math.max(
+        MIN_ZOOM,
+        Math.min(
+          (oRect.width - padding * 2) / naturalW,
+          (oRect.height - padding * 2) / naturalH,
+        ),
+      ),
+    );
+    // panX = 0 → CSS-centered. panY centers vertically with padding.
+    setViewport({
+      zoom: fitZoom,
+      panX: 0,
+      panY: (oRect.height - naturalH * fitZoom) / 2,
+    });
+  };
+
+  // Auto-center the selected card in the visible viewport whenever the selection changes.
+  useEffect(() => {
+    if (!selection) return;
+    let cardId: string | null = null;
+    if (selection.kind === "agent") cardId = "__agent";
+    else if (selection.kind === "trigger") cardId = "__trigger";
+    else if (selection.kind === "task") cardId = selection.taskId;
+    else if (selection.kind === "branch") cardId = selection.branchId;
+    if (!cardId) return;
+
+    // Wait for layout to settle (the RHS panel mounting may shrink the canvas's flex-1 width).
+    const raf = requestAnimationFrame(() => {
+      const outer = outerRef.current;
+      if (!outer) return;
+      const card = outer.querySelector<HTMLElement>(`[data-card-id="${cardId}"]`);
+      if (!card) return;
+      const oRect = outer.getBoundingClientRect();
+      const cRect = card.getBoundingClientRect();
+      // Always recenter horizontally — keeps the workflow centered between LHS and RHS
+      // even as the panels open/close and shrink the canvas.
+      const dx = oRect.left + oRect.width / 2 - (cRect.left + cRect.width / 2);
+      // Vertically: only scroll into view when the card is actually outside the visible area.
+      // Don't push the workflow down just because the user clicked the agent header.
+      const PAD = 80;
+      let dy = 0;
+      if (cRect.top < oRect.top + PAD) {
+        dy = oRect.top + PAD - cRect.top;
+      } else if (cRect.bottom > oRect.bottom - PAD) {
+        dy = oRect.bottom - PAD - cRect.bottom;
+      }
+      if (Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
+      setTransitioning(true);
+      setViewport((v) => ({ ...v, panX: v.panX + dx, panY: v.panY + dy }));
+      if (transitionTimerRef.current) window.clearTimeout(transitionTimerRef.current);
+      transitionTimerRef.current = window.setTimeout(() => {
+        setTransitioning(false);
+        transitionTimerRef.current = null;
+      }, 320);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [selection]);
+
+  // Kill the transition the moment the user starts a manual pan / zoom interaction.
+  const stopTransition = () => {
+    if (transitionTimerRef.current) {
+      window.clearTimeout(transitionTimerRef.current);
+      transitionTimerRef.current = null;
+    }
+    setTransitioning(false);
+  };
+
+  const resetView = () => {
+    setViewport({ panX: 0, panY: 80, zoom: 1 });
+  };
+
   return (
     <div
+      ref={outerRef}
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
       onDragEnd={handleDragEnd}
       onDrop={handleDragEnd}
-      className="relative z-10 flex flex-1 flex-col items-center overflow-y-auto px-6 py-6"
+      onMouseDown={handleCanvasMouseDown}
+      className={`relative z-10 flex-1 overflow-hidden select-none ${
+        spacePan || panDragRef.current ? "cursor-grabbing" : "cursor-grab"
+      }`}
+      style={{
+        backgroundImage:
+          "radial-gradient(circle, rgba(15,23,42,0.08) 1px, transparent 1px)",
+        backgroundSize: `${24 * viewport.zoom}px ${24 * viewport.zoom}px`,
+        backgroundPosition: `${viewport.panX}px ${viewport.panY}px`,
+      }}
     >
-      <div className="flex h-10 items-center gap-1 rounded-md border border-[#e5e9f0] bg-white px-1 shadow-[0_1px_3px_rgba(15,23,42,0.06)] animate-in fade-in slide-in-from-top-2 duration-300 dark:border-[#333a47] dark:bg-[#1e2229]">
-        <CanvasToolButton aria-label="Download">
-          <ArrowDownToLine className="h-4 w-4" />
-        </CanvasToolButton>
-        <span className="h-5 w-px bg-[#e5e9f0] dark:bg-[#333a47]" />
-        <CanvasToolButton aria-label="Direction">
-          <ArrowRight className="h-4 w-4" />
-        </CanvasToolButton>
-        <span className="h-5 w-px bg-[#e5e9f0] dark:bg-[#333a47]" />
-        <button
-          type="button"
-          className="flex h-8 items-center gap-1 rounded px-2 text-sm text-[#212121] transition-colors hover:bg-[#f4f6f7] dark:text-[#e4e4e4] dark:hover:bg-[#262b35]"
-        >
-          100%
-          <ChevronDown className="h-3.5 w-3.5" />
-        </button>
-        <span className="h-5 w-px bg-[#e5e9f0] dark:bg-[#333a47]" />
-        <CanvasToolButton aria-label="Run">
-          <Play className="h-4 w-4" />
-        </CanvasToolButton>
+      {/* Toolbar — fixed in viewport, not affected by pan/zoom */}
+      <div className="pointer-events-none absolute inset-x-0 top-6 z-20 flex justify-center">
+        <div className="pointer-events-auto flex h-10 items-center gap-1 rounded-md border border-[#e5e9f0] bg-white px-1 shadow-[0_1px_3px_rgba(15,23,42,0.06)] animate-in fade-in slide-in-from-top-2 duration-300 dark:border-[#333a47] dark:bg-[#1e2229]">
+          <CanvasToolButton aria-label="Download">
+            <ArrowDownToLine className="h-4 w-4" />
+          </CanvasToolButton>
+          <span className="h-5 w-px bg-[#e5e9f0] dark:bg-[#333a47]" />
+          <CanvasToolButton aria-label="Direction">
+            <ArrowRight className="h-4 w-4" />
+          </CanvasToolButton>
+          <span className="h-5 w-px bg-[#e5e9f0] dark:bg-[#333a47]" />
+          <CanvasToolButton aria-label="Fit to view" title="Fit to view" onClick={fitToView}>
+            <Maximize2 className="h-4 w-4" />
+          </CanvasToolButton>
+          <Popover open={zoomMenuOpen} onOpenChange={setZoomMenuOpen}>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className="flex h-8 items-center gap-1 rounded px-2 text-sm text-[#212121] transition-colors hover:bg-[#f4f6f7] dark:text-[#e4e4e4] dark:hover:bg-[#262b35]"
+              >
+                {Math.round(viewport.zoom * 100)}%
+                <ChevronDown className="h-3.5 w-3.5" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent align="center" className="w-44 p-1">
+              {ZOOM_PRESETS.map((z) => (
+                <button
+                  key={z}
+                  type="button"
+                  onClick={() => {
+                    setZoomAroundCenter(z);
+                    setZoomMenuOpen(false);
+                  }}
+                  className="flex w-full items-center justify-between rounded px-2 py-1.5 text-sm text-[#212121] transition-colors hover:bg-[#f4f6f7] dark:text-[#e4e4e4] dark:hover:bg-[#262b35]"
+                >
+                  <span>{Math.round(z * 100)}%</span>
+                  {Math.abs(viewport.zoom - z) < 0.01 && <Check className="h-3.5 w-3.5" />}
+                </button>
+              ))}
+              <span className="my-1 block h-px bg-[#e5e9f0] dark:bg-[#333a47]" />
+              <button
+                type="button"
+                onClick={() => {
+                  fitToView();
+                  setZoomMenuOpen(false);
+                }}
+                className="flex w-full items-center rounded px-2 py-1.5 text-sm text-[#212121] transition-colors hover:bg-[#f4f6f7] dark:text-[#e4e4e4] dark:hover:bg-[#262b35]"
+              >
+                Fit to view
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  resetView();
+                  setZoomMenuOpen(false);
+                }}
+                className="flex w-full items-center rounded px-2 py-1.5 text-sm text-[#212121] transition-colors hover:bg-[#f4f6f7] dark:text-[#e4e4e4] dark:hover:bg-[#262b35]"
+              >
+                Reset view
+              </button>
+            </PopoverContent>
+          </Popover>
+          <span className="h-5 w-px bg-[#e5e9f0] dark:bg-[#333a47]" />
+          <CanvasToolButton
+            aria-label="Undo"
+            title="Undo"
+            disabled={!canUndo}
+            onClick={onUndo}
+            className={!canUndo ? "opacity-40 hover:bg-transparent hover:text-[#6b7280] dark:hover:bg-transparent dark:hover:text-[#9ba2b0]" : undefined}
+          >
+            <Undo2 className="h-4 w-4" />
+          </CanvasToolButton>
+          <CanvasToolButton
+            aria-label="Redo"
+            title="Redo"
+            disabled={!canRedo}
+            onClick={onRedo}
+            className={!canRedo ? "opacity-40 hover:bg-transparent hover:text-[#6b7280] dark:hover:bg-transparent dark:hover:text-[#9ba2b0]" : undefined}
+          >
+            <Redo2 className="h-4 w-4" />
+          </CanvasToolButton>
+          <span className="h-5 w-px bg-[#e5e9f0] dark:bg-[#333a47]" />
+          <CanvasToolButton aria-label="Run">
+            <Play className="h-4 w-4" />
+          </CanvasToolButton>
+        </div>
       </div>
 
-      <div className="mt-10 flex flex-col items-center">
+      {/* Pan/zoom transformed content. Anchored at canvas top-center via CSS so it
+          stays centered between LHS/RHS exactly like the toolbar — panX is the user's
+          offset from the centered baseline. Zoom anchors at the content's top-center. */}
+      <div
+        ref={contentRef}
+        style={{
+          transform: `translate(calc(-50% + ${viewport.panX}px), ${viewport.panY}px) scale(${viewport.zoom})`,
+          transformOrigin: "50% 0",
+          transition: transitioning ? "transform 280ms ease-out" : "none",
+        }}
+        className="absolute left-1/2 top-0"
+      >
+        <div className="flex flex-col items-center">
         {/* Agent header — pill, smaller than the workflow cards */}
         <BuilderCard
           width="w-[280px]"
           variant={placedTrigger ? "pill" : "raised"}
           selected={agentSelected}
           onClick={onSelectAgent}
+          dataCardId="__agent"
         >
           <div className="flex items-center gap-3">
             <Sparkles className="h-5 w-5 shrink-0 text-[#6834b7] dark:text-[#b39ae5]" />
@@ -1222,6 +1954,7 @@ function WorkflowCanvas({
               variant="raised"
               selected={triggerSelected}
               onClick={onTriggerSelect}
+              dataCardId="__trigger"
             >
               <CardEyebrow icon={<Zap className="h-3.5 w-3.5 text-[#6834b7] dark:text-[#b39ae5]" />}>
                 Trigger
@@ -1243,69 +1976,238 @@ function WorkflowCanvas({
           </>
         )}
 
-        {/* Task slots + task cards (only meaningful after a trigger is placed) */}
+        {/* Task slots + task / branch cards (only meaningful after a trigger is placed) */}
         {placedTrigger && (
           <>
-            {placedTasks.map((task, i) => (
-              <Fragment key={task.id}>
-                <Connector />
-                <DropSlot
-                  accept="task"
-                  activeDrag={activeDrag}
-                  onDrop={handleTaskDrop(i)}
-                />
-                <Connector />
-                <DragHandleWrapper
-                  onDragStart={handleTaskCardDragStart(task.id)}
-                  onDragEnd={handleTaskCardDragEnd}
-                >
-                  <BuilderCard
-                    width={CARD_WIDTH}
-                    variant="raised"
-                    selected={selection?.kind === "task" && selection.taskId === task.id}
-                    onClick={() => onTaskSelect(task.id)}
-                    enterAnimation
-                    isDragging={draggingTaskId === task.id}
-                    draggable
-                    onDragStart={handleTaskCardDragStart(task.id)}
-                    onDragEnd={handleTaskCardDragEnd}
-                    dataTaskId={task.id}
-                  >
-                    <CardEyebrow
-                      icon={<ClipboardList className="h-3.5 w-3.5 text-[#1976d2] dark:text-[#5b9bf5]" />}
-                      right={
-                        <div className="flex items-center gap-2">
-                          <Switch
-                            checked={task.enabled}
-                            onCheckedChange={(v) => onTaskEnabledChange(task.id, v)}
-                            onClick={(e) => e.stopPropagation()}
-                          />
-                          <MoreVertical className="h-4 w-4 text-[#9ca3af] dark:text-[#6b7280]" />
-                        </div>
-                      }
-                    >
-                      Task
-                    </CardEyebrow>
-                    <CardTitle>
-                      {i + 2}. {task.label}
-                    </CardTitle>
-                    <CardDescription>{task.description}</CardDescription>
-                  </BuilderCard>
-                </DragHandleWrapper>
-              </Fragment>
-            ))}
-
-            {/* Trailing slot — small `+` handle when idle, drop zone when dragging */}
-            <Connector />
-            <DropSlot
-              accept="task"
+            <NodeFlow
+              nodes={placedNodes}
+              startIndexLabel={2}
               activeDrag={activeDrag}
-              onDrop={handleTaskDrop(placedTasks.length)}
+              draggingTaskId={draggingTaskId}
+              selection={selection}
+              onTaskSelect={onTaskSelect}
+              onBranchSelect={onBranchSelect}
+              onTaskEnabledChange={onTaskEnabledChange}
+              onBranchEnabledChange={onBranchEnabledChange}
+              onTaskDragStart={handleTaskCardDragStart}
+              onTaskDragEnd={handleTaskCardDragEnd}
+              topLevelDrop={handleTaskDrop}
+              laneDrop={handleLaneDrop}
             />
             <Connector />
             <span className="text-xs text-[#6b7280] dark:text-[#9ba2b0]">End</span>
           </>
         )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── NodeFlow: renders a vertical sequence of task / branch nodes ─────────
+
+interface NodeFlowProps {
+  nodes: WorkflowNode[];
+  /** Number to start counting tasks from in card titles (top-level: 2, since trigger is 1). */
+  startIndexLabel: number;
+  activeDrag: DragKind;
+  draggingTaskId: string | null;
+  selection: CanvasSelection;
+  onTaskSelect: (taskId: string) => void;
+  onBranchSelect: (branchId: string) => void;
+  onTaskEnabledChange: (taskId: string, enabled: boolean) => void;
+  onBranchEnabledChange: (branchId: string, enabled: boolean) => void;
+  onTaskDragStart: (taskId: string) => (e: ReactDragEvent<HTMLDivElement>) => void;
+  onTaskDragEnd: () => void;
+  /** Returned function takes the insertion index. */
+  topLevelDrop: (atIndex: number) => (e: ReactDragEvent<HTMLDivElement>) => void;
+  /** Drop into a specific lane id at a specific position. */
+  laneDrop: (laneId: string, atIndex: number) => (e: ReactDragEvent<HTMLDivElement>) => void;
+  /** When set, this NodeFlow lives inside a branch lane — drops route to laneDrop. */
+  laneId?: string;
+}
+
+function NodeFlow({
+  nodes,
+  startIndexLabel,
+  activeDrag,
+  draggingTaskId,
+  selection,
+  onTaskSelect,
+  onBranchSelect,
+  onTaskEnabledChange,
+  onBranchEnabledChange,
+  onTaskDragStart,
+  onTaskDragEnd,
+  topLevelDrop,
+  laneDrop,
+  laneId,
+}: NodeFlowProps) {
+  const dropAt = (i: number) => (laneId ? laneDrop(laneId, i) : topLevelDrop(i));
+
+  return (
+    <>
+      {nodes.map((node, i) => (
+        <Fragment key={node.id}>
+          <Connector />
+          <DropSlot accept="task" activeDrag={activeDrag} onDrop={dropAt(i)} />
+          <Connector />
+          {node.kind === "task" ? (
+            <DragHandleWrapper
+              onDragStart={onTaskDragStart(node.id)}
+              onDragEnd={onTaskDragEnd}
+            >
+              <BuilderCard
+                width={CARD_WIDTH}
+                variant="raised"
+                selected={selection?.kind === "task" && selection.taskId === node.id}
+                onClick={() => onTaskSelect(node.id)}
+                enterAnimation
+                isDragging={draggingTaskId === node.id}
+                draggable
+                onDragStart={onTaskDragStart(node.id)}
+                onDragEnd={onTaskDragEnd}
+                dataTaskId={node.id}
+                dataCardId={node.id}
+              >
+                <CardEyebrow
+                  icon={<ClipboardList className="h-3.5 w-3.5 text-[#1976d2] dark:text-[#5b9bf5]" />}
+                  right={
+                    <div className="flex items-center gap-2">
+                      <Switch
+                        checked={node.enabled}
+                        onCheckedChange={(v) => onTaskEnabledChange(node.id, v)}
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                      <MoreVertical className="h-4 w-4 text-[#9ca3af] dark:text-[#6b7280]" />
+                    </div>
+                  }
+                >
+                  Task
+                </CardEyebrow>
+                <CardTitle>
+                  {startIndexLabel + i}. {node.label}
+                </CardTitle>
+                <CardDescription>{node.description}</CardDescription>
+              </BuilderCard>
+            </DragHandleWrapper>
+          ) : (
+            <BranchBlock
+              branch={node}
+              indexLabel={startIndexLabel + i}
+              activeDrag={activeDrag}
+              draggingTaskId={draggingTaskId}
+              selection={selection}
+              onTaskSelect={onTaskSelect}
+              onBranchSelect={onBranchSelect}
+              onTaskEnabledChange={onTaskEnabledChange}
+              onBranchEnabledChange={onBranchEnabledChange}
+              onTaskDragStart={onTaskDragStart}
+              onTaskDragEnd={onTaskDragEnd}
+              topLevelDrop={topLevelDrop}
+              laneDrop={laneDrop}
+            />
+          )}
+        </Fragment>
+      ))}
+      <Connector />
+      <DropSlot accept="task" activeDrag={activeDrag} onDrop={dropAt(nodes.length)} />
+    </>
+  );
+}
+
+interface BranchBlockProps {
+  branch: PlacedBranch;
+  indexLabel: number;
+  activeDrag: DragKind;
+  draggingTaskId: string | null;
+  selection: CanvasSelection;
+  onTaskSelect: (taskId: string) => void;
+  onBranchSelect: (branchId: string) => void;
+  onTaskEnabledChange: (taskId: string, enabled: boolean) => void;
+  onBranchEnabledChange: (branchId: string, enabled: boolean) => void;
+  onTaskDragStart: (taskId: string) => (e: ReactDragEvent<HTMLDivElement>) => void;
+  onTaskDragEnd: () => void;
+  topLevelDrop: (atIndex: number) => (e: ReactDragEvent<HTMLDivElement>) => void;
+  laneDrop: (laneId: string, atIndex: number) => (e: ReactDragEvent<HTMLDivElement>) => void;
+}
+
+function BranchBlock({
+  branch,
+  indexLabel,
+  activeDrag,
+  draggingTaskId,
+  selection,
+  onTaskSelect,
+  onBranchSelect,
+  onTaskEnabledChange,
+  onBranchEnabledChange,
+  onTaskDragStart,
+  onTaskDragEnd,
+  topLevelDrop,
+  laneDrop,
+}: BranchBlockProps) {
+  const isSelected = selection?.kind === "branch" && selection.branchId === branch.id;
+  return (
+    <div className="flex flex-col items-center">
+      <BuilderCard
+        width={CARD_WIDTH}
+        variant="raised"
+        selected={isSelected}
+        onClick={() => onBranchSelect(branch.id)}
+        enterAnimation
+        dataCardId={branch.id}
+      >
+        <CardEyebrow
+          icon={<GitBranch className="h-3.5 w-3.5 text-[#1976d2] dark:text-[#5b9bf5]" />}
+          right={
+            <div className="flex items-center gap-2">
+              <Switch
+                checked={branch.enabled}
+                onCheckedChange={(v) => onBranchEnabledChange(branch.id, v)}
+                onClick={(e) => e.stopPropagation()}
+              />
+              <Plus className="h-4 w-4 text-[#9ca3af] dark:text-[#6b7280]" />
+              <MoreVertical className="h-4 w-4 text-[#9ca3af] dark:text-[#6b7280]" />
+            </div>
+          }
+        >
+          {branch.label}
+        </CardEyebrow>
+        <CardTitle>
+          {indexLabel}. Based on {branch.branchType === "condition" ? "conditions" : branch.branchType}
+        </CardTitle>
+        <CardDescription>{branch.description}</CardDescription>
+      </BuilderCard>
+
+      {/* Lanes panel */}
+      <Connector />
+      <div className="rounded-2xl border-2 border-[#c4cbd6]/60 bg-white/30 p-4 dark:border-[#3d4555]/60 dark:bg-[#1e2229]/30">
+        <div className="flex items-start gap-6">
+          {branch.lanes.map((lane) => (
+            <div key={lane.id} className="flex flex-col items-center gap-1 min-w-[360px]">
+              <span className="max-w-[200px] truncate rounded border border-[#e5e9f0] bg-white px-3 py-1 text-xs text-[#212121] dark:border-[#333a47] dark:bg-[#262b35] dark:text-[#f3f4f6]">
+                {lane.name || (lane.isDefault ? "No conditions met" : "Lane")}
+              </span>
+              <NodeFlow
+                nodes={lane.nodes}
+                startIndexLabel={1}
+                activeDrag={activeDrag}
+                draggingTaskId={draggingTaskId}
+                selection={selection}
+                onTaskSelect={onTaskSelect}
+                onBranchSelect={onBranchSelect}
+                onTaskEnabledChange={onTaskEnabledChange}
+                onBranchEnabledChange={onBranchEnabledChange}
+                onTaskDragStart={onTaskDragStart}
+                onTaskDragEnd={onTaskDragEnd}
+                topLevelDrop={topLevelDrop}
+                laneDrop={laneDrop}
+                laneId={lane.id}
+              />
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -1327,6 +2229,8 @@ interface BuilderCardProps {
   isDragging?: boolean;
   /** Optional id used by the drag-preview lookup (data-task-id). */
   dataTaskId?: string;
+  /** Stable id used by the auto-center logic to find a card by selection. */
+  dataCardId?: string;
   children: React.ReactNode;
 }
 
@@ -1341,6 +2245,7 @@ function BuilderCard({
   onDragEnd,
   isDragging,
   dataTaskId,
+  dataCardId,
   children,
 }: BuilderCardProps) {
   const radius = variant === "pill" ? "rounded-full" : "rounded-xl";
@@ -1372,6 +2277,7 @@ function BuilderCard({
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       data-task-id={dataTaskId}
+      data-card-id={dataCardId}
       className={`flex ${width} flex-col gap-2 ${radius} bg-white ${padding} text-left ${shadow} outline-none transition-[background-color,box-shadow,opacity,transform] duration-200 ease-out ${enter} ${ring} ${cursor} ${dragState} dark:bg-[#262b35]`}
     >
       {children}
@@ -1468,9 +2374,10 @@ function DropSlot({
   idleHandle = "plus",
 }: DropSlotProps) {
   const [hovering, setHovering] = useState(false);
-  // Task slots also accept task-reorder drags (moving an existing card).
+  // Task slots accept tasks, task-reorders (moving an existing card), and branches.
   const accepts = (k: DragKind) =>
-    k === accept || (accept === "task" && k === "task-reorder");
+    k === accept ||
+    (accept === "task" && (k === "task-reorder" || k === "branch"));
   const dragging = accepts(activeDrag);
 
   const handleDragOver = (e: ReactDragEvent<HTMLDivElement>) => {
@@ -1540,11 +2447,11 @@ function DropSlot({
   );
 }
 
-function CanvasToolButton({ children, ...rest }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
+function CanvasToolButton({ children, className, ...rest }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
     <button
       type="button"
-      className="flex h-8 w-8 items-center justify-center rounded text-[#6b7280] transition-colors hover:bg-[#f4f6f7] hover:text-[#212121] dark:text-[#9ba2b0] dark:hover:bg-[#262b35] dark:hover:text-[#f3f4f6]"
+      className={`flex h-8 w-8 items-center justify-center rounded text-[#6b7280] transition-colors hover:bg-[#f4f6f7] hover:text-[#212121] disabled:cursor-not-allowed dark:text-[#9ba2b0] dark:hover:bg-[#262b35] dark:hover:text-[#f3f4f6] ${className ?? ""}`}
       {...rest}
     >
       {children}
@@ -2027,6 +2934,7 @@ function TaskConfigPanel({
   onPromptChange,
   onClose,
 }: TaskConfigPanelProps) {
+  const [contextPickerOpen, setContextPickerOpen] = useState(false);
   return (
     <aside className="flex w-[360px] shrink-0 flex-col rounded-lg bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04)] animate-in slide-in-from-right-4 fade-in duration-300 ease-out dark:bg-[#1e2229]">
       <header className="flex items-center justify-between border-b border-[#e5e9f0] px-5 py-4 dark:border-[#252b35]">
@@ -2091,6 +2999,7 @@ function TaskConfigPanel({
             </div>
             <button
               type="button"
+              onClick={() => setContextPickerOpen(true)}
               className="mt-2 self-start text-xs font-medium text-[#1976d2] hover:underline dark:text-[#5b9bf5]"
             >
               + 8 more
@@ -2196,6 +3105,10 @@ function TaskConfigPanel({
           Save
         </Button>
       </footer>
+      <ContextPickerDialog
+        open={contextPickerOpen}
+        onOpenChange={setContextPickerOpen}
+      />
     </aside>
   );
 }
