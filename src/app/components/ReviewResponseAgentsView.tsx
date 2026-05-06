@@ -50,6 +50,8 @@ import {
 import { FunnelSimple } from "@phosphor-icons/react";
 import { FilterPanel, type FilterItem } from "./FilterPanel";
 import { AgentOutcomesView } from "./AgentOutcomesView";
+import { AgentActivityView, type AgentRun } from "./AgentActivityView";
+import { AgentRunDetailView } from "./AgentRunDetailView";
 import { ReviewResponseAgentBuilderView } from "./ReviewResponseAgentBuilderView";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -479,6 +481,8 @@ export function ReviewResponseAgentsView() {
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [outcomesAgent, setOutcomesAgent] = useState<Agent | null>(null);
+  const [activityAgent, setActivityAgent] = useState<Agent | null>(null);
+  const [runDetail, setRunDetail] = useState<{ agent: Agent; run: AgentRun } | null>(null);
   const [creatingAgent, setCreatingAgent] = useState(false);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [filterOpen, setFilterOpen] = useState(false);
@@ -574,6 +578,26 @@ export function ReviewResponseAgentsView() {
       <AgentOutcomesView
         agent={{ id: outcomesAgent.id, name: outcomesAgent.name, status: outcomesAgent.status }}
         onBack={() => setOutcomesAgent(null)}
+      />
+    );
+  }
+
+  if (runDetail) {
+    return (
+      <AgentRunDetailView
+        agent={{ id: runDetail.agent.id, name: runDetail.agent.name, status: runDetail.agent.status }}
+        run={runDetail.run}
+        onBack={() => setRunDetail(null)}
+      />
+    );
+  }
+
+  if (activityAgent) {
+    return (
+      <AgentActivityView
+        agent={{ id: activityAgent.id, name: activityAgent.name, status: activityAgent.status }}
+        onBack={() => setActivityAgent(null)}
+        onViewRun={(run) => setRunDetail({ agent: activityAgent, run })}
       />
     );
   }
@@ -830,6 +854,12 @@ export function ReviewResponseAgentsView() {
                             className="h-9 cursor-pointer rounded-[6px] px-3 text-[14px] text-[#374151] focus:bg-[#f3f4f6] focus:text-[#111827] dark:text-[#e4e4e4] dark:focus:bg-[#252b35] dark:focus:text-[#f3f4f6]"
                           >
                             Outcomes
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onSelect={() => setActivityAgent(agent)}
+                            className="h-9 cursor-pointer rounded-[6px] px-3 text-[14px] text-[#374151] focus:bg-[#f3f4f6] focus:text-[#111827] dark:text-[#e4e4e4] dark:focus:bg-[#252b35] dark:focus:text-[#f3f4f6]"
+                          >
+                            Activity
                           </DropdownMenuItem>
                           <DropdownMenuSeparator className="my-1 bg-[#eaeaea] dark:bg-[#252b35]" />
                           <DropdownMenuItem className="h-9 cursor-pointer rounded-[6px] px-3 text-[14px] text-[#dc2626] focus:bg-[#fef2f2] focus:text-[#b91c1c] dark:text-[#f87171] dark:focus:bg-[#2a1515] dark:focus:text-[#fca5a5]">
