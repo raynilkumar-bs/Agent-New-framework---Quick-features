@@ -42,6 +42,12 @@ import {
   Undo2,
   Redo2,
 } from "lucide-react";
+import * as DialogPrimitive from "@radix-ui/react-dialog";
+import {
+  Dialog,
+  DialogPortal,
+  DialogOverlay,
+} from "@/app/components/ui/dialog";
 import { Button } from "@/app/components/ui/button";
 import { Input } from "@/app/components/ui/input";
 import { Textarea } from "@/app/components/ui/textarea";
@@ -72,6 +78,16 @@ import {
 import { useRequestChromeless } from "@/app/context/ChromeContext";
 import { ContextPickerDialog } from "@/app/components/ContextPickerDialog";
 import { BranchConfigPanel } from "@/app/components/BranchConfigPanel";
+
+function TaskIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" className={className} aria-hidden="true">
+      <rect x="2" y="2" width="12" height="12" rx="2" stroke="currentColor" strokeWidth="1.5" />
+      <line x1="5" y1="6.25" x2="11" y2="6.25" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <line x1="5" y1="9.75" x2="11" y2="9.75" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
 
 interface Props {
   onBack: () => void;
@@ -2071,7 +2087,7 @@ function NodeFlow({
                 dataCardId={node.id}
               >
                 <CardEyebrow
-                  icon={<ClipboardList className="h-3.5 w-3.5 text-[#1976d2] dark:text-[#5b9bf5]" />}
+                  icon={<TaskIcon className="h-3.5 w-3.5 text-[#1976d2] dark:text-[#5b9bf5]" />}
                   right={
                     <div className="flex items-center gap-2">
                       <Switch
@@ -2919,7 +2935,7 @@ function TaskConfigPanel({
   onPromptChange,
   onClose,
 }: TaskConfigPanelProps) {
-  const [contextPickerOpen, setContextPickerOpen] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   return (
     <aside className="flex w-[360px] shrink-0 flex-col rounded-lg bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04)] animate-in slide-in-from-right-4 fade-in duration-300 ease-out dark:bg-[#1e2229]">
       <header className="flex items-center justify-between border-b border-[#e5e9f0] px-5 py-4 dark:border-[#252b35]">
@@ -2935,6 +2951,7 @@ function TaskConfigPanel({
           <button
             type="button"
             aria-label="Expand"
+            onClick={() => setExpanded(true)}
             className="flex h-7 w-7 items-center justify-center rounded text-[#6b7280] transition-colors hover:bg-[#f4f6f7] hover:text-[#212121] dark:text-[#9ba2b0] dark:hover:bg-[#262b35] dark:hover:text-[#f3f4f6]"
           >
             <Maximize2 className="h-3.5 w-3.5" />
@@ -2951,150 +2968,708 @@ function TaskConfigPanel({
       </header>
 
       <div className="flex flex-1 flex-col gap-5 overflow-y-auto px-5 py-5">
-        <Field label="Task name" required>
-          <Input
-            value={name}
-            onChange={(e) => onNameChange(e.target.value)}
-            className="h-9"
-          />
-        </Field>
-        <Field label="Description" required>
-          <Textarea
-            value={description}
-            onChange={(e) => onDescriptionChange(e.target.value)}
-            rows={5}
-            className="resize-none text-sm leading-5"
-          />
-        </Field>
-        <Field label="LLM Model" tooltip>
-          <button
-            type="button"
-            className="flex h-9 items-center justify-between rounded-md border border-[#e5e9f0] bg-white px-3 text-sm text-[#212121] transition-colors hover:border-[#c4d5e9] hover:bg-[#f8fafc] dark:border-[#333a47] dark:bg-[#262b35] dark:text-[#e4e4e4] dark:hover:border-[#5580e0]"
-          >
-            Fast
-            <ChevronDown className="h-4 w-4 text-[#6b7280]" />
-          </button>
-        </Field>
-        <Field label="Context" tooltip>
-          <ChipField>
-            <div className="flex flex-wrap gap-1.5">
-              {DEFAULT_CONTEXT_CHIPS.map((c, i) => (
-                <ContextChip key={c.id} chip={c} index={i} />
-              ))}
-            </div>
-            <button
-              type="button"
-              onClick={() => setContextPickerOpen(true)}
-              className="mt-2 self-start text-xs font-medium text-[#1976d2] hover:underline dark:text-[#5b9bf5]"
-            >
-              + 8 more
-            </button>
-          </ChipField>
-        </Field>
-        <Field label="Input fields" tooltip>
-          <ChipField>
-            <div className="flex flex-wrap gap-1.5">
-              {DEFAULT_INPUT_CHIPS.map((c, i) => (
-                <ContextChip
-                  key={c.id}
-                  chip={{ ...c, kind: "var" }}
-                  index={i}
-                  removable
-                />
-              ))}
-            </div>
-            <button
-              type="button"
-              className="mt-2 inline-flex items-center gap-1 self-start text-xs font-medium text-[#1976d2] transition-colors hover:underline dark:text-[#5b9bf5]"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              Add
-            </button>
-          </ChipField>
-        </Field>
-        <Field label="System prompt" required>
-          <PromptField>
-            <textarea
-              value={prompt}
-              onChange={(e) => onPromptChange(e.target.value)}
-              rows={4}
-              className="w-full resize-none bg-transparent px-3 pt-3 text-sm leading-5 text-[#212121] outline-none placeholder:text-[#9ca3af] dark:text-[#e4e4e4] dark:placeholder:text-[#6b7280]"
-            />
-            <PromptToolbar variant="system" />
-          </PromptField>
-        </Field>
-        <Field label="User prompt" required>
-          <PromptField>
-            <div className="px-3 pt-3 pb-1 text-sm leading-5 text-[#212121] dark:text-[#e4e4e4]">
-              <p className="whitespace-pre-wrap">
-                {DEFAULT_USER_PROMPT_PRE}
-                <ContextChip
-                  chip={{ id: "userp-1", label: "Review.source", kind: "var" }}
-                  index={0}
-                  removable
-                />
-                {DEFAULT_USER_PROMPT_POST}
-              </p>
-            </div>
-            <PromptToolbar variant="user" />
-          </PromptField>
-        </Field>
-        <Field label="Output fields">
-          <ChipField>
-            <div className="flex flex-wrap gap-1.5">
-              {DEFAULT_OUTPUT_CHIPS.map((c, i) => (
-                <ContextChip
-                  key={c.id}
-                  chip={{ ...c, kind: "var" }}
-                  index={i}
-                  removable
-                />
-              ))}
-            </div>
-            <div className="mt-2 flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                className="inline-flex items-center gap-1 text-xs font-medium text-[#1976d2] transition-colors hover:underline dark:text-[#5b9bf5]"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                Add
-              </button>
-              <button
-                type="button"
-                className="inline-flex items-center gap-1 text-xs font-medium text-[#6834b7] transition-colors hover:underline dark:text-[#b39ae5]"
-              >
-                <Sparkles className="h-3.5 w-3.5" />
-                Generate from prompt
-              </button>
-            </div>
-          </ChipField>
-        </Field>
+        <TaskFieldStack
+          name={name}
+          onNameChange={onNameChange}
+          description={description}
+          onDescriptionChange={onDescriptionChange}
+          prompt={prompt}
+          onPromptChange={onPromptChange}
+        />
       </div>
 
       <footer className="flex flex-col gap-3 border-t border-[#e5e9f0] px-5 py-4 dark:border-[#252b35]">
-        <div className="flex flex-col gap-1.5">
-          <div className="flex items-center justify-between text-xs">
-            <span className="font-medium text-[#212121] dark:text-[#f3f4f6]">
-              Prompt strength:
-            </span>
-            <span className="text-[#16a34a] dark:text-[#4ade80]">Strong</span>
-          </div>
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-[#e5e9f0] dark:bg-[#262b35]">
-            <div
-              className="h-full rounded-full bg-[#22c55e] transition-[width] duration-500 ease-out"
-              style={{ width: "85%" }}
-            />
-          </div>
-        </div>
+        <PromptStrengthMeter />
         <Button size="sm" className="h-9 w-full">
           Save
         </Button>
       </footer>
+      <TaskExpandedDialog
+        open={expanded}
+        onOpenChange={setExpanded}
+        name={name}
+        onNameChange={onNameChange}
+        description={description}
+        onDescriptionChange={onDescriptionChange}
+        prompt={prompt}
+        onPromptChange={onPromptChange}
+      />
+    </aside>
+  );
+}
+
+interface TaskFieldStackProps {
+  name: string;
+  onNameChange: (next: string) => void;
+  description: string;
+  onDescriptionChange: (next: string) => void;
+  prompt: string;
+  onPromptChange: (next: string) => void;
+}
+
+function TaskFieldStack({
+  name,
+  onNameChange,
+  description,
+  onDescriptionChange,
+  prompt,
+  onPromptChange,
+}: TaskFieldStackProps) {
+  const [contextPickerOpen, setContextPickerOpen] = useState(false);
+  return (
+    <>
+      <Field label="Task name" required>
+        <Input
+          value={name}
+          onChange={(e) => onNameChange(e.target.value)}
+          className="h-9"
+        />
+      </Field>
+      <Field label="Description" required>
+        <Textarea
+          value={description}
+          onChange={(e) => onDescriptionChange(e.target.value)}
+          rows={5}
+          className="resize-none text-sm leading-5"
+        />
+      </Field>
+      <Field label="LLM Model" tooltip>
+        <button
+          type="button"
+          className="flex h-9 items-center justify-between rounded-md border border-[#e5e9f0] bg-white px-3 text-sm text-[#212121] transition-colors hover:border-[#c4d5e9] hover:bg-[#f8fafc] dark:border-[#333a47] dark:bg-[#262b35] dark:text-[#e4e4e4] dark:hover:border-[#5580e0]"
+        >
+          Fast
+          <ChevronDown className="h-4 w-4 text-[#6b7280]" />
+        </button>
+      </Field>
+      <Field label="Context" tooltip>
+        <ChipField>
+          <div className="flex flex-wrap gap-1.5">
+            {DEFAULT_CONTEXT_CHIPS.map((c, i) => (
+              <ContextChip key={c.id} chip={c} index={i} />
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => setContextPickerOpen(true)}
+            className="mt-2 self-start text-xs font-medium text-[#1976d2] hover:underline dark:text-[#5b9bf5]"
+          >
+            + 8 more
+          </button>
+        </ChipField>
+      </Field>
+      <Field label="Input fields" tooltip>
+        <ChipField>
+          <div className="flex flex-wrap gap-1.5">
+            {DEFAULT_INPUT_CHIPS.map((c, i) => (
+              <ContextChip
+                key={c.id}
+                chip={{ ...c, kind: "var" }}
+                index={i}
+                removable
+              />
+            ))}
+          </div>
+          <button
+            type="button"
+            className="mt-2 inline-flex items-center gap-1 self-start text-xs font-medium text-[#1976d2] transition-colors hover:underline dark:text-[#5b9bf5]"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add
+          </button>
+        </ChipField>
+      </Field>
+      <Field label="System prompt" required>
+        <PromptField>
+          <textarea
+            value={prompt}
+            onChange={(e) => onPromptChange(e.target.value)}
+            rows={4}
+            className="w-full resize-none bg-transparent px-3 pt-3 text-sm leading-5 text-[#212121] outline-none placeholder:text-[#9ca3af] dark:text-[#e4e4e4] dark:placeholder:text-[#6b7280]"
+          />
+          <PromptToolbar variant="system" />
+        </PromptField>
+      </Field>
+      <Field label="User prompt" required>
+        <PromptField>
+          <div className="px-3 pt-3 pb-1 text-sm leading-5 text-[#212121] dark:text-[#e4e4e4]">
+            <p className="whitespace-pre-wrap">
+              {DEFAULT_USER_PROMPT_PRE}
+              <ContextChip
+                chip={{ id: "userp-1", label: "Review.source", kind: "var" }}
+                index={0}
+                removable
+              />
+              {DEFAULT_USER_PROMPT_POST}
+            </p>
+          </div>
+          <PromptToolbar variant="user" />
+        </PromptField>
+      </Field>
+      <Field label="Output fields">
+        <ChipField>
+          <div className="flex flex-wrap gap-1.5">
+            {DEFAULT_OUTPUT_CHIPS.map((c, i) => (
+              <ContextChip
+                key={c.id}
+                chip={{ ...c, kind: "var" }}
+                index={i}
+                removable
+              />
+            ))}
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 text-xs font-medium text-[#1976d2] transition-colors hover:underline dark:text-[#5b9bf5]"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Add
+            </button>
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 text-xs font-medium text-[#6834b7] transition-colors hover:underline dark:text-[#b39ae5]"
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              Generate from prompt
+            </button>
+          </div>
+        </ChipField>
+      </Field>
       <ContextPickerDialog
         open={contextPickerOpen}
         onOpenChange={setContextPickerOpen}
       />
-    </aside>
+    </>
+  );
+}
+
+function PromptStrengthMeter({
+  strength = "strong",
+}: {
+  strength?: "weak" | "strong";
+}) {
+  const isStrong = strength === "strong";
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center justify-between text-xs">
+        <span className="font-medium text-[#212121] dark:text-[#f3f4f6]">
+          Prompt strength:
+        </span>
+        <span
+          className={`transition-colors duration-700 ease-out ${
+            isStrong
+              ? "text-[#16a34a] dark:text-[#4ade80]"
+              : "text-[#dc2626] dark:text-[#f87171]"
+          }`}
+        >
+          {isStrong ? "Strong" : "Weak"}
+        </span>
+      </div>
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-[#e5e9f0] dark:bg-[#262b35]">
+        <div
+          className={`h-full rounded-full transition-[width,background-color] duration-700 ease-out ${
+            isStrong ? "bg-[#22c55e]" : "bg-[#ef4444]"
+          }`}
+          style={{ width: isStrong ? "85%" : "20%" }}
+        />
+      </div>
+    </div>
+  );
+}
+
+interface TaskExpandedDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  name: string;
+  onNameChange: (next: string) => void;
+  description: string;
+  onDescriptionChange: (next: string) => void;
+  prompt: string;
+  onPromptChange: (next: string) => void;
+}
+
+type PreviewState = "idle" | "running" | "ready";
+
+export function TaskExpandedDialog({
+  open,
+  onOpenChange,
+  name,
+  onNameChange,
+  description,
+  onDescriptionChange,
+  prompt,
+  onPromptChange,
+}: TaskExpandedDialogProps) {
+  const [previewState, setPreviewState] = useState<PreviewState>("idle");
+
+  // Reset preview when the dialog closes so reopening starts fresh.
+  useEffect(() => {
+    if (!open) setPreviewState("idle");
+  }, [open]);
+
+  const handleRun = () => {
+    setPreviewState("running");
+    window.setTimeout(() => setPreviewState("ready"), RUNNING_TOTAL_DURATION_MS);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogPortal>
+        <DialogOverlay />
+        <DialogPrimitive.Content
+          aria-describedby={undefined}
+          className="fixed left-1/2 top-1/2 z-50 flex w-[min(1120px,calc(100vw-3rem))] h-[min(720px,calc(100vh-3rem))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg bg-white shadow-[0_24px_64px_rgba(15,23,42,0.18)] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 dark:bg-[#1e2229]"
+        >
+          <header className="flex items-center justify-between border-b border-[#e5e9f0] px-6 py-4 dark:border-[#252b35]">
+            <DialogPrimitive.Title className="text-sm font-medium text-[#212121] dark:text-[#f3f4f6]">
+              Task
+            </DialogPrimitive.Title>
+            <DialogPrimitive.Close
+              aria-label="Close"
+              className="flex h-7 w-7 items-center justify-center rounded text-[#6b7280] transition-colors hover:bg-[#f4f6f7] hover:text-[#212121] dark:text-[#9ba2b0] dark:hover:bg-[#262b35] dark:hover:text-[#f3f4f6]"
+            >
+              <X className="h-4 w-4" />
+            </DialogPrimitive.Close>
+          </header>
+
+          <div className="grid flex-1 min-h-0 grid-cols-2">
+            <div className="flex flex-col gap-5 overflow-y-auto border-r border-[#e5e9f0] px-6 py-6 dark:border-[#252b35]">
+              <TaskFieldStack
+                name={name}
+                onNameChange={onNameChange}
+                description={description}
+                onDescriptionChange={onDescriptionChange}
+                prompt={prompt}
+                onPromptChange={onPromptChange}
+              />
+            </div>
+            <div className="flex min-h-0 flex-col overflow-hidden bg-[#f4f6f7] dark:bg-[#1a1d23]">
+              <TaskPreviewPane state={previewState} onRun={handleRun} />
+            </div>
+          </div>
+
+          <footer className="flex items-center justify-between gap-4 border-t border-[#e5e9f0] px-6 py-4 dark:border-[#252b35]">
+            <div className="w-[280px]">
+              <PromptStrengthMeter
+                strength={previewState === "ready" ? "strong" : "weak"}
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-9 px-4 text-[#1976d2] hover:bg-[#ecf2fb] dark:text-[#5b9bf5] dark:hover:bg-[#1c2c4a]"
+                onClick={() => onOpenChange(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                className="h-9 px-4"
+                onClick={() => onOpenChange(false)}
+              >
+                Save
+              </Button>
+            </div>
+          </footer>
+        </DialogPrimitive.Content>
+      </DialogPortal>
+    </Dialog>
+  );
+}
+
+type PreviewRow =
+  | { id: string; kind: "number" | "string"; value: string }
+  | { id: string; kind: "object"; rows: PreviewRow[] };
+
+const PREVIEW_INPUT_ROWS = [
+  {
+    id: "review_text",
+    value: "I went for a root canal, Mr.John was very professional",
+  },
+];
+
+const PREVIEW_AGENT_OUTPUT_ROWS: PreviewRow[] = [
+  { id: "id", kind: "number", value: "545043398" },
+  { id: "overallRating", kind: "number", value: "5" },
+  { id: "comments", kind: "string", value: "\"This is a great place for boon...\"" },
+  { id: "businessAggregationId", kind: "number", value: "9651531" },
+  { id: "sourceType", kind: "string", value: "\"Google\"" },
+];
+
+const PREVIEW_TOOL_OUTPUT_ROWS: PreviewRow[] = [
+  { id: "comments", kind: "string", value: "\"This is a great place for boon...\"" },
+  { id: "sourceType", kind: "string", value: "\"Google\"" },
+  { id: "reviewDate", kind: "string", value: "\"Fri, Mar 27, 2026 12:46 AM\"" },
+  {
+    id: "reviewer",
+    kind: "object",
+    rows: [
+      { id: "comments", kind: "string", value: "\"This is a great place for boon...\"" },
+      { id: "sourceType", kind: "string", value: "\"Google\"" },
+    ],
+  },
+  { id: "reviewDate", kind: "string", value: "\"Fri, Mar 27, 2026 12:46 AM\"" },
+  { id: "status", kind: "number", value: "2" },
+  { id: "featured", kind: "number", value: "false" },
+];
+
+const PREVIEW_TOOL_PROPERTY_COUNT = 6;
+
+function TaskPreviewPane({
+  state,
+  onRun,
+}: {
+  state: PreviewState;
+  onRun: () => void;
+}) {
+  if (state === "idle") {
+    return (
+      <div className="flex flex-1 min-h-0 flex-col items-center justify-center gap-5 px-8 py-8 text-center animate-in fade-in duration-300">
+        <PreviewPlaceholderIllustration />
+        <div className="flex flex-col gap-1">
+          <span className="text-sm font-medium text-[#212121] dark:text-[#f3f4f6]">
+            Your preview will appear here
+          </span>
+          <span className="text-xs text-[#6b7280] dark:text-[#9ba2b0]">
+            Run task to generate preview
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={onRun}
+          className="inline-flex h-9 items-center gap-2 rounded-md bg-[#ecf2fb] px-4 text-sm font-medium text-[#1976d2] transition-colors hover:bg-[#dde7f4] dark:bg-[#1c2c4a] dark:text-[#5b9bf5] dark:hover:bg-[#1f3357]"
+        >
+          <Play className="h-3.5 w-3.5 fill-current" />
+          Run task
+        </button>
+      </div>
+    );
+  }
+
+  if (state === "running") {
+    return <RunningStepper />;
+  }
+
+  return (
+    <div className="flex flex-1 min-h-0 flex-col">
+      <div className="flex shrink-0 items-center justify-between border-b border-[#e5e9f0] bg-[#f4f6f7] px-5 py-4 dark:border-[#252b35] dark:bg-[#1a1d23]">
+        <span className="text-sm font-medium text-[#212121] dark:text-[#f3f4f6]">
+          Preview
+        </span>
+        <button
+          type="button"
+          onClick={onRun}
+          className="inline-flex h-8 items-center gap-1.5 rounded-md bg-[#ecf2fb] px-3 text-xs font-medium text-[#1976d2] transition-colors hover:bg-[#dde7f4] dark:bg-[#1c2c4a] dark:text-[#5b9bf5] dark:hover:bg-[#1f3357]"
+        >
+          <Play className="h-3.5 w-3.5 fill-current" />
+          Run task
+        </button>
+      </div>
+
+      <div className="flex flex-1 min-h-0 flex-col gap-3 overflow-hidden px-5 py-4 animate-in fade-in slide-in-from-bottom-2 duration-400">
+        <PreviewInputTable rows={PREVIEW_INPUT_ROWS} />
+        <PreviewOutputCard />
+        <PreviewFeedback />
+      </div>
+    </div>
+  );
+}
+
+function PreviewInputTable({
+  rows,
+}: {
+  rows: { id: string; value: string }[];
+}) {
+  return (
+    <div className="flex shrink-0 max-h-[110px] flex-col overflow-hidden rounded-lg border border-[#e5e9f0] bg-white dark:border-[#333a47] dark:bg-[#262b35]">
+      <div className="grid shrink-0 grid-cols-[1fr_1.4fr_28px] items-center gap-2 border-b border-[#e5e9f0] px-3 py-2 text-xs font-medium text-[#6b7280] dark:border-[#333a47] dark:text-[#9ba2b0]">
+        <span>Input fields</span>
+        <span>Values</span>
+        <span />
+      </div>
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        {rows.map((row) => (
+          <div
+            key={row.id}
+            className="grid grid-cols-[1fr_1.4fr_28px] items-start gap-2 px-3 py-2.5"
+          >
+            <div>
+              <span className="inline-flex h-6 items-center gap-1 rounded-md bg-[#ecf2fb] px-2 text-xs text-[#212121] dark:bg-[#1c2c4a] dark:text-[#e4e4e4]">
+                <Braces className="h-3 w-3 text-[#1976d2] dark:text-[#5b9bf5]" />
+                <span className="max-w-[140px] truncate">{row.id}</span>
+              </span>
+            </div>
+            <p className="text-xs leading-5 text-[#212121] dark:text-[#e4e4e4]">
+              {row.value}
+            </p>
+            <button
+              type="button"
+              aria-label="More"
+              className="flex h-6 w-6 items-center justify-center rounded text-[#9ca3af] transition-colors hover:bg-[#f4f6f7] hover:text-[#212121] dark:text-[#6b7280] dark:hover:bg-[#262b35] dark:hover:text-[#f3f4f6]"
+            >
+              <MoreVertical className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PreviewOutputCard() {
+  return (
+    <JsonInspectorCard
+      className="shrink-0 max-h-[340px]"
+      sections={[
+        {
+          id: "agent-output",
+          label: "Agent output",
+          rows: PREVIEW_AGENT_OUTPUT_ROWS,
+        },
+        {
+          id: "tool-output",
+          label: (
+            <>
+              Tool : Review responder{" "}
+              <span className="font-normal text-[#6b7280] dark:text-[#9ba2b0]">
+                {`{ ${PREVIEW_TOOL_PROPERTY_COUNT} properties }`}
+              </span>
+            </>
+          ),
+          rows: PREVIEW_TOOL_OUTPUT_ROWS,
+        },
+      ]}
+    />
+  );
+}
+
+export interface JsonInspectorSection {
+  id: string;
+  label: React.ReactNode;
+  rows: PreviewRow[];
+  defaultOpen?: boolean;
+}
+
+export function JsonInspectorCard({
+  sections,
+  className,
+}: {
+  sections: JsonInspectorSection[];
+  className?: string;
+}) {
+  const defaultOpen = sections
+    .filter((s) => s.defaultOpen !== false)
+    .map((s) => s.id);
+  return (
+    <div
+      className={`flex flex-col overflow-hidden rounded-lg border border-[#e5e9f0] bg-white dark:border-[#333a47] dark:bg-[#262b35] ${className ?? ""}`}
+    >
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        <Accordion
+          type="multiple"
+          defaultValue={defaultOpen}
+          className="flex flex-col"
+        >
+          {sections.map((section) => (
+            <AccordionItem
+              key={section.id}
+              value={section.id}
+              className="border-0"
+            >
+              <AccordionTrigger className="items-center justify-start gap-0 px-3 py-2 text-xs font-medium text-[#212121] hover:no-underline dark:text-[#f3f4f6] [&>svg]:order-first [&>svg]:mr-1.5 [&>svg]:translate-y-0">
+                <span>{section.label}</span>
+              </AccordionTrigger>
+              <AccordionContent className="pb-2">
+                <div className="flex flex-col">
+                  {section.rows.map((row, i) => (
+                    <JsonInspectorRow
+                      key={`${row.id}-${i}`}
+                      row={row}
+                      depth={1}
+                    />
+                  ))}
+                </div>
+              </AccordionContent>
+            </AccordionItem>
+          ))}
+        </Accordion>
+      </div>
+    </div>
+  );
+}
+
+function JsonInspectorRow({
+  row,
+  depth,
+}: {
+  row: PreviewRow;
+  depth: number;
+}) {
+  const paddingLeft = depth * 22 + 12;
+
+  if (row.kind === "object") {
+    return (
+      <Accordion type="multiple" defaultValue={[row.id]} className="contents">
+        <AccordionItem value={row.id} className="border-0">
+          <AccordionTrigger
+            className="items-center justify-start gap-0 py-1 pr-3 text-xs font-normal text-[#212121] hover:no-underline dark:text-[#f3f4f6] [&>svg]:order-first [&>svg]:mr-1.5 [&>svg]:translate-y-0"
+            style={{ paddingLeft }}
+          >
+            <span className="inline-flex items-center gap-2">
+              <JsonChip label={row.id} />
+              <span className="text-xs text-[#6b7280] dark:text-[#9ba2b0]">
+                {`{ ${row.rows.length} properties }`}
+              </span>
+            </span>
+          </AccordionTrigger>
+          <AccordionContent className="pb-1">
+            <div className="flex flex-col">
+              {row.rows.map((child, i) => (
+                <JsonInspectorRow
+                  key={`${child.id}-${i}`}
+                  row={child}
+                  depth={depth + 1}
+                />
+              ))}
+            </div>
+          </AccordionContent>
+        </AccordionItem>
+      </Accordion>
+    );
+  }
+
+  const valueClass =
+    row.kind === "number"
+      ? "text-[#1976d2] dark:text-[#5b9bf5]"
+      : "text-[#16a34a] dark:text-[#4ade80]";
+  return (
+    <div
+      className="flex items-center gap-2 py-1 pr-3"
+      style={{ paddingLeft }}
+    >
+      <JsonChip label={row.id} />
+      <span className={`truncate text-xs ${valueClass}`}>{row.value}</span>
+    </div>
+  );
+}
+
+function JsonChip({ label }: { label: string }) {
+  return (
+    <span className="inline-flex h-6 w-fit shrink-0 items-center gap-1 rounded-md bg-[#ecf2fb] px-2 text-xs text-[#212121] dark:bg-[#1c2c4a] dark:text-[#e4e4e4]">
+      <Braces className="h-3 w-3 text-[#1976d2] dark:text-[#5b9bf5]" />
+      <span className="whitespace-nowrap">{label}</span>
+    </span>
+  );
+}
+
+function PreviewFeedback() {
+  const [feedback, setFeedback] = useState("");
+  return (
+    <div className="flex shrink-0 flex-col gap-2">
+      <span className="text-xs font-medium text-[#212121] dark:text-[#f3f4f6]">
+        Your feedback
+      </span>
+      <div className="flex flex-col gap-2 rounded-lg border border-[#e5e9f0] bg-white p-3 dark:border-[#333a47] dark:bg-[#262b35]">
+        <textarea
+          value={feedback}
+          onChange={(e) => setFeedback(e.target.value)}
+          placeholder="Output look wrong? Provide feedback to improve your prompt"
+          rows={2}
+          className="w-full resize-none bg-transparent text-xs leading-5 text-[#212121] outline-none placeholder:text-[#9ca3af] dark:text-[#e4e4e4] dark:placeholder:text-[#6b7280]"
+        />
+        <div className="flex justify-end">
+          <button
+            type="button"
+            disabled={feedback.trim().length === 0}
+            className="inline-flex h-8 items-center rounded-md border border-[#e5e9f0] bg-white px-3 text-xs font-medium text-[#212121] transition-colors hover:border-[#c4d5e9] hover:bg-[#f8fafc] disabled:cursor-not-allowed disabled:opacity-60 dark:border-[#333a47] dark:bg-[#262b35] dark:text-[#e4e4e4] dark:hover:border-[#5580e0]"
+          >
+            Submit to revise prompt
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const RUNNING_STEPS: { kind: string; label: string }[] = [
+  { kind: "Trigger", label: "When review is received" },
+  { kind: "Task 1", label: "Identify relevant mentions" },
+  { kind: "Task 2", label: "Detect sentiment" },
+  { kind: "Task 3", label: "Filter spam" },
+  { kind: "Preview", label: "Generating output" },
+];
+const RUNNING_STEP_DURATION_MS = 800;
+const RUNNING_TOTAL_DURATION_MS =
+  RUNNING_STEPS.length * RUNNING_STEP_DURATION_MS;
+
+function RunningStepper() {
+  const [step, setStep] = useState(0);
+  const [barPercent, setBarPercent] = useState(0);
+
+  useEffect(() => {
+    const target = ((step + 1) / RUNNING_STEPS.length) * 100;
+    setBarPercent(target);
+    if (step >= RUNNING_STEPS.length - 1) return;
+    const t = window.setTimeout(
+      () => setStep(step + 1),
+      RUNNING_STEP_DURATION_MS,
+    );
+    return () => window.clearTimeout(t);
+  }, [step]);
+
+  const current = RUNNING_STEPS[step];
+
+  return (
+    <div className="flex flex-1 min-h-0 flex-col items-center justify-center px-8 py-8 animate-in fade-in duration-300">
+      <div className="flex w-full max-w-[260px] flex-col items-center gap-3">
+        <div className="flex w-full items-center justify-between">
+          <span className="text-sm font-medium text-[#212121] dark:text-[#f3f4f6]">
+            Preparing your preview
+          </span>
+          <span className="tabular-nums text-xs font-medium text-[#1976d2] dark:text-[#5b9bf5]">
+            {Math.round(barPercent)}%
+          </span>
+        </div>
+        <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-[#e5e9f0] dark:bg-[#262b35]">
+          <div
+            className="relative h-full overflow-hidden rounded-full bg-[#1976d2] transition-[width] duration-[600ms] ease-out dark:bg-[#5b9bf5]"
+            style={{ width: `${barPercent}%` }}
+          >
+            <div className="preview-progress-shimmer absolute inset-y-0 left-0 w-1/3 bg-gradient-to-r from-transparent via-white/45 to-transparent" />
+          </div>
+        </div>
+        <div className="mt-2 flex w-full flex-col items-start gap-1">
+          <span className="text-xs text-[#6b7280] dark:text-[#9ba2b0]">
+            Step {step + 1} of {RUNNING_STEPS.length} · {current.kind}
+          </span>
+          <span
+            key={step}
+            className="text-sm font-medium text-[#212121] animate-in fade-in slide-in-from-bottom-1 duration-300 dark:text-[#f3f4f6]"
+          >
+            {current.label}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PreviewPlaceholderIllustration() {
+  return (
+    <div className="flex h-[180px] w-[220px] items-center justify-center rounded-2xl border border-[#dbe2ec] bg-white/60 dark:border-[#333a47] dark:bg-[#262b35]/40">
+      <div className="flex w-[140px] flex-col gap-2.5 rounded-lg border border-[#dbe2ec] bg-white p-3 shadow-[0_1px_3px_rgba(15,23,42,0.04)] dark:border-[#333a47] dark:bg-[#262b35]">
+        <div className="flex items-center gap-2">
+          <div className="h-1.5 w-1.5 rounded-full bg-[#c4d5e9] dark:bg-[#3d4555]" />
+          <div className="h-1.5 flex-1 rounded-full bg-[#c4d5e9] dark:bg-[#3d4555]" />
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="h-1.5 w-1.5 rounded-full bg-[#c4d5e9] dark:bg-[#3d4555]" />
+          <div className="h-1.5 flex-1 rounded-full bg-[#c4d5e9] dark:bg-[#3d4555]" />
+        </div>
+      </div>
+    </div>
   );
 }
 
