@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Search,
   Plus,
@@ -7,13 +7,21 @@ import {
   TrendingUp,
   ChevronUp,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   MoreHorizontal,
   LayoutGrid,
   List,
+  Columns3,
+  GripVertical,
+  Lock,
 } from "lucide-react";
+import { DndProvider, useDrag, useDrop } from "react-dnd";
+import { HTML5Backend } from "react-dnd-html5-backend";
 import { Button } from "@/app/components/ui/button";
 import { Badge } from "@/app/components/ui/badge";
 import { Input } from "@/app/components/ui/input";
+import { Switch } from "@/app/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/app/components/ui/tabs";
 import {
   Table,
@@ -44,6 +52,7 @@ import {
 import {
   Sheet,
   SheetContent,
+  SheetFooter,
   SheetHeader,
   SheetTitle,
 } from "@/app/components/ui/sheet";
@@ -70,6 +79,10 @@ interface Agent {
   timeSaved: string;
   locations: number;
   locationNames: string[];
+  reviewSpam: boolean;
+  spammedReviews: number;
+  lastRun: string;
+  createdBy: string;
 }
 
 // ─── Mock data ────────────────────────────────────────────────────────────────
@@ -113,6 +126,10 @@ const MOCK_AGENTS: Agent[] = [
     timeSaved: "4h 20m",
     locations: 500,
     locationNames: generateLocations(500),
+    reviewSpam: true,
+    spammedReviews: 24,
+    lastRun: "2 hours ago",
+    createdBy: "Priya Shah",
   },
   {
     id: "a2",
@@ -125,6 +142,10 @@ const MOCK_AGENTS: Agent[] = [
     timeSaved: "1h 10m",
     locations: 250,
     locationNames: generateLocations(250),
+    reviewSpam: false,
+    spammedReviews: 0,
+    lastRun: "15 min ago",
+    createdBy: "Marcus Chen",
   },
   {
     id: "a3",
@@ -137,6 +158,10 @@ const MOCK_AGENTS: Agent[] = [
     timeSaved: "45m",
     locations: 200,
     locationNames: generateLocations(200),
+    reviewSpam: true,
+    spammedReviews: 13,
+    lastRun: "Yesterday",
+    createdBy: "Aisha Patel",
   },
   {
     id: "a4",
@@ -149,6 +174,10 @@ const MOCK_AGENTS: Agent[] = [
     timeSaved: "3h 20m",
     locations: 100,
     locationNames: generateLocations(100),
+    reviewSpam: false,
+    spammedReviews: 0,
+    lastRun: "1 hour ago",
+    createdBy: "Diego Ramirez",
   },
 ];
 
@@ -161,7 +190,85 @@ type SortKey =
   | "responseRate"
   | "avgResponseTime"
   | "timeSaved"
-  | "locations";
+  | "locations"
+  | "reviewSpam"
+  | "lastRun"
+  | "createdBy";
+
+type ColumnId = SortKey;
+
+interface ColumnDef {
+  id: ColumnId;
+  label: string;
+  sortKey: SortKey;
+  width: string;
+  pinned?: boolean;
+}
+
+const DEFAULT_COLUMNS: ColumnDef[] = [
+  { id: "name", label: "Agent name", sortKey: "name", width: "w-[360px] min-w-[280px]", pinned: true },
+  { id: "status", label: "Status", sortKey: "status", width: "w-[140px]" },
+  { id: "reviewsResponded", label: "Reviews responded", sortKey: "reviewsResponded", width: "w-[180px]" },
+  { id: "responseRate", label: "Response rate", sortKey: "responseRate", width: "w-[150px]" },
+  { id: "avgResponseTime", label: "Avg response time", sortKey: "avgResponseTime", width: "w-[180px]" },
+  { id: "timeSaved", label: "Time saved", sortKey: "timeSaved", width: "w-[150px]" },
+  { id: "locations", label: "Locations", sortKey: "locations", width: "w-[140px]" },
+  { id: "reviewSpam", label: "Review spam", sortKey: "reviewSpam", width: "w-[140px]" },
+  { id: "lastRun", label: "Last run", sortKey: "lastRun", width: "w-[160px]" },
+  { id: "createdBy", label: "Created by", sortKey: "createdBy", width: "w-[160px]" },
+];
+
+const DEFAULT_VISIBILITY: Record<ColumnId, boolean> = {
+  name: true,
+  status: true,
+  reviewsResponded: true,
+  responseRate: true,
+  avgResponseTime: true,
+  timeSaved: true,
+  locations: true,
+  reviewSpam: true,
+  lastRun: false,
+  createdBy: false,
+};
+
+const COLUMNS_STORAGE_KEY = "rr-agents-columns-v1";
+
+interface ColumnState {
+  order: ColumnId[];
+  visibility: Record<ColumnId, boolean>;
+}
+
+const DEFAULT_COLUMN_STATE: ColumnState = {
+  order: DEFAULT_COLUMNS.map((c) => c.id),
+  visibility: DEFAULT_VISIBILITY,
+};
+
+function loadColumnState(): ColumnState {
+  if (typeof window === "undefined") return DEFAULT_COLUMN_STATE;
+  try {
+    const raw = window.localStorage.getItem(COLUMNS_STORAGE_KEY);
+    if (!raw) return DEFAULT_COLUMN_STATE;
+    const parsed = JSON.parse(raw) as Partial<ColumnState>;
+    const knownIds = new Set<ColumnId>(DEFAULT_COLUMNS.map((c) => c.id));
+    const savedOrder = (parsed.order ?? []).filter((id): id is ColumnId => knownIds.has(id as ColumnId));
+    const missing = DEFAULT_COLUMNS.map((c) => c.id).filter((id) => !savedOrder.includes(id));
+    return {
+      order: [...savedOrder, ...missing],
+      visibility: { ...DEFAULT_VISIBILITY, ...(parsed.visibility ?? {}) },
+    };
+  } catch {
+    return DEFAULT_COLUMN_STATE;
+  }
+}
+
+function saveColumnState(state: ColumnState) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(COLUMNS_STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    /* ignore quota / privacy mode failures */
+  }
+}
 
 function timeToMinutes(value: string): number {
   const hours = /([0-9]+)h/.exec(value);
@@ -472,6 +579,310 @@ function LibraryGrid({ viewMode }: { viewMode: "grid" | "list" }) {
   );
 }
 
+// ─── Review-spam badge ────────────────────────────────────────────────────────
+
+function ReviewSpamBadge({ value }: { value: boolean }) {
+  if (value) {
+    return (
+      <Badge className="rounded-[4px] border-transparent bg-[#fde8e8] px-2 py-1 text-[10px] font-normal text-[#b91c1c] dark:bg-[#3a1e1e] dark:text-[#f87171]">
+        Yes
+      </Badge>
+    );
+  }
+  return (
+    <Badge className="rounded-[4px] border-transparent bg-[#f3f4f6] px-2 py-1 text-[10px] font-normal text-[#555] dark:bg-[#252b35] dark:text-[#9ba2b0]">
+      No
+    </Badge>
+  );
+}
+
+// ─── Metric scroller ──────────────────────────────────────────────────────────
+
+function MetricScroller({ children }: { children: React.ReactNode }) {
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const [canLeft, setCanLeft] = useState(false);
+  const [canRight, setCanRight] = useState(false);
+
+  const updateChevrons = () => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const maxScroll = el.scrollWidth - el.clientWidth;
+    setCanLeft(el.scrollLeft > 1);
+    setCanRight(el.scrollLeft < maxScroll - 1);
+  };
+
+  useLayoutEffect(() => {
+    updateChevrons();
+  }, []);
+
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    el.addEventListener("scroll", updateChevrons, { passive: true });
+    const ro = new ResizeObserver(updateChevrons);
+    ro.observe(el);
+    return () => {
+      el.removeEventListener("scroll", updateChevrons);
+      ro.disconnect();
+    };
+  }, []);
+
+  const scrollBy = (dx: number) => {
+    scrollerRef.current?.scrollBy({ left: dx, behavior: "smooth" });
+  };
+
+  return (
+    <div className="relative">
+      <div
+        ref={scrollerRef}
+        className="flex gap-5 overflow-x-auto scroll-smooth pb-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+      >
+        {children}
+      </div>
+
+      {canLeft && (
+        <button
+          type="button"
+          aria-label="Scroll metrics left"
+          onClick={() => scrollBy(-320)}
+          className="absolute left-0 top-1/2 z-10 flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-[#eaeaea] bg-white text-[#374151] shadow-[0_4px_12px_-2px_rgba(16,24,40,0.12)] transition-colors hover:bg-[#f8f9fb] dark:border-[#252b35] dark:bg-[#1e2229] dark:text-[#e4e4e4] dark:hover:bg-[#252b35]"
+        >
+          <ChevronLeft className="h-4 w-4" />
+        </button>
+      )}
+      {canRight && (
+        <button
+          type="button"
+          aria-label="Scroll metrics right"
+          onClick={() => scrollBy(320)}
+          className="absolute right-0 top-1/2 z-10 flex h-8 w-8 -translate-y-1/2 translate-x-1/2 items-center justify-center rounded-full border border-[#eaeaea] bg-white text-[#374151] shadow-[0_4px_12px_-2px_rgba(16,24,40,0.12)] transition-colors hover:bg-[#f8f9fb] dark:border-[#252b35] dark:bg-[#1e2229] dark:text-[#e4e4e4] dark:hover:bg-[#252b35]"
+        >
+          <ChevronRight className="h-4 w-4" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ─── Column customizer drawer ────────────────────────────────────────────────
+
+const COL_DRAG_TYPE = "rr-agents-column";
+
+interface DraggableColumnRowProps {
+  col: ColumnDef;
+  index: number;
+  visible: boolean;
+  onToggle: (id: ColumnId, next: boolean) => void;
+  onMove: (fromIndex: number, toIndex: number) => void;
+}
+
+function DraggableColumnRow({ col, index, visible, onToggle, onMove }: DraggableColumnRowProps) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [dropIndicator, setDropIndicator] = useState<"above" | "below" | null>(null);
+  const isPinned = !!col.pinned;
+
+  const [{ isDragging }, drag] = useDrag({
+    type: COL_DRAG_TYPE,
+    item: { index },
+    canDrag: () => !isPinned,
+    collect: (monitor) => ({ isDragging: monitor.isDragging() }),
+  });
+
+  const [{ isOver }, drop] = useDrop({
+    accept: COL_DRAG_TYPE,
+    canDrop: () => !isPinned,
+    hover: (item: { index: number }, monitor) => {
+      if (!ref.current) return;
+      if (item.index === index) {
+        setDropIndicator(null);
+        return;
+      }
+      const rect = ref.current.getBoundingClientRect();
+      const middleY = (rect.bottom - rect.top) / 2;
+      const offset = monitor.getClientOffset();
+      if (!offset) return;
+      const clientY = offset.y - rect.top;
+      setDropIndicator(clientY < middleY ? "above" : "below");
+    },
+    drop: (item: { index: number }) => {
+      const from = item.index;
+      const to = index;
+      if (from === to) return;
+      let insert: number;
+      if (from < to) {
+        insert = dropIndicator === "above" ? to - 1 : to;
+      } else {
+        insert = dropIndicator === "above" ? to : to + 1;
+      }
+      onMove(from, Math.max(0, insert));
+      setDropIndicator(null);
+    },
+    collect: (monitor) => ({ isOver: monitor.isOver() }),
+  });
+
+  useEffect(() => {
+    if (!isOver) setDropIndicator(null);
+  }, [isOver]);
+
+  drag(drop(ref));
+
+  const showAbove = isOver && dropIndicator === "above" && !isPinned;
+  const showBelow = isOver && dropIndicator === "below" && !isPinned;
+
+  return (
+    <div
+      ref={ref}
+      className="relative"
+      style={{
+        opacity: isDragging ? 0.35 : 1,
+        transform: isDragging ? "scale(0.98)" : "scale(1)",
+        transition:
+          "opacity 0.25s cubic-bezier(0.2, 0, 0, 1), transform 0.25s cubic-bezier(0.2, 0, 0, 1)",
+      }}
+    >
+      {showAbove && (
+        <div className="pointer-events-none absolute -top-[3px] left-3 right-3 z-10 flex items-center animate-[pulse_1.4s_ease-in-out_infinite]">
+          <div className="h-[6px] w-[6px] shrink-0 rounded-full bg-[#2552ED] shadow-[0_0_0_3px_rgba(37,82,237,0.18)]" />
+          <div className="h-[2px] flex-1 rounded-full bg-[#2552ED]" />
+          <div className="h-[6px] w-[6px] shrink-0 rounded-full bg-[#2552ED] shadow-[0_0_0_3px_rgba(37,82,237,0.18)]" />
+        </div>
+      )}
+      <div
+        className={`group flex items-center gap-4 rounded-[8px] border px-3.5 py-3.5 ${
+          isPinned
+            ? "border-transparent bg-[#fafbfc] dark:bg-[#181c24]"
+            : isDragging
+            ? "border-[#2552ED] bg-white shadow-[0_8px_24px_-6px_rgba(37,82,237,0.25),0_2px_6px_-2px_rgba(16,24,40,0.08)] dark:bg-[#1e2229]"
+            : "border-transparent hover:border-[#eaeaea] hover:bg-[#fafbfc] dark:hover:border-[#252b35] dark:hover:bg-[#181c24]"
+        }`}
+        style={{
+          transition:
+            "background-color 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease",
+        }}
+      >
+        <span
+          className={`flex h-6 w-6 items-center justify-center rounded-[4px] transition-colors ${
+            isPinned
+              ? "text-[#cdd2dc] dark:text-[#3a4150]"
+              : "cursor-grab text-[#9ba2b0] hover:bg-[#eef0f4] hover:text-[#374151] active:cursor-grabbing dark:hover:bg-[#252b35] dark:hover:text-[#e4e4e4]"
+          }`}
+          aria-hidden
+        >
+          <GripVertical className="h-[18px] w-[18px]" />
+        </span>
+        <span className="flex-1 text-[14px] leading-5 text-[#212121] dark:text-[#e4e4e4]">
+          {col.label}
+        </span>
+        {isPinned ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="flex h-6 w-6 items-center justify-center rounded-[4px] text-[#9ba2b0]">
+                <Lock className="h-[14px] w-[14px]" />
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>Pinned · always visible</TooltipContent>
+          </Tooltip>
+        ) : null}
+        <Switch
+          checked={visible}
+          onCheckedChange={(next) => onToggle(col.id, next)}
+          disabled={isPinned}
+          aria-label={`Toggle ${col.label}`}
+        />
+      </div>
+      {showBelow && (
+        <div className="pointer-events-none absolute -bottom-[3px] left-3 right-3 z-10 flex items-center animate-[pulse_1.4s_ease-in-out_infinite]">
+          <div className="h-[6px] w-[6px] shrink-0 rounded-full bg-[#2552ED] shadow-[0_0_0_3px_rgba(37,82,237,0.18)]" />
+          <div className="h-[2px] flex-1 rounded-full bg-[#2552ED]" />
+          <div className="h-[6px] w-[6px] shrink-0 rounded-full bg-[#2552ED] shadow-[0_0_0_3px_rgba(37,82,237,0.18)]" />
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface ColumnsCustomizerProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  state: ColumnState;
+  onChange: (next: ColumnState) => void;
+}
+
+function ColumnsCustomizer({ open, onOpenChange, state, onChange }: ColumnsCustomizerProps) {
+  const orderedColumns = useMemo(() => {
+    const byId = new Map(DEFAULT_COLUMNS.map((c) => [c.id, c]));
+    return state.order.map((id) => byId.get(id)).filter((c): c is ColumnDef => Boolean(c));
+  }, [state.order]);
+
+  const visibleCount = orderedColumns.filter((c) => state.visibility[c.id]).length;
+
+  const handleToggle = (id: ColumnId, next: boolean) => {
+    onChange({ ...state, visibility: { ...state.visibility, [id]: next } });
+  };
+
+  const handleMove = (from: number, to: number) => {
+    const next = [...state.order];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    onChange({ ...state, order: next });
+  };
+
+  const handleReset = () => {
+    onChange(DEFAULT_COLUMN_STATE);
+  };
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent
+        side="right"
+        className="flex w-[560px] flex-col gap-0 p-0 sm:max-w-[560px] dark:bg-[#1e2229]"
+      >
+        <SheetHeader className="gap-1.5 border-b border-[#eaeaea] px-7 py-6 dark:border-[#252b35]">
+          <SheetTitle className="text-[18px] font-medium leading-7 tracking-[-0.36px] text-[#111827] dark:text-[#f3f4f6]">
+            Customize columns
+          </SheetTitle>
+          <p className="text-[13px] leading-5 text-[#6b7280] dark:text-[#9ba2b0]">
+            Drag to reorder. Toggle to show or hide.
+          </p>
+          <div className="mt-1 inline-flex w-fit items-center gap-1.5 rounded-full bg-[#eef2ff] px-2.5 py-1 text-[11px] font-medium text-[#3730a3] dark:bg-[#1e2d5e] dark:text-[#a5b4fc]">
+            <span className="h-1.5 w-1.5 rounded-full bg-[#3730a3] dark:bg-[#a5b4fc]" />
+            {visibleCount} of {orderedColumns.length} columns visible
+          </div>
+        </SheetHeader>
+
+        <div className="flex-1 overflow-y-auto px-5 py-5">
+          <DndProvider backend={HTML5Backend}>
+            <div className="flex flex-col gap-1.5">
+              {orderedColumns.map((col, idx) => (
+                <DraggableColumnRow
+                  key={col.id}
+                  col={col}
+                  index={idx}
+                  visible={state.visibility[col.id]}
+                  onToggle={handleToggle}
+                  onMove={handleMove}
+                />
+              ))}
+            </div>
+          </DndProvider>
+          <p className="mt-5 px-1 text-[12px] leading-4 text-[#9ba2b0]">
+            Changes save automatically and persist across sessions.
+          </p>
+        </div>
+
+        <SheetFooter className="flex-row items-center justify-between gap-2 border-t border-[#eaeaea] bg-[#fafbfc] px-7 py-4 dark:border-[#252b35] dark:bg-[#181c24]">
+          <Button variant="ghost" size="sm" onClick={handleReset} className="text-[#374151] dark:text-[#e4e4e4]">
+            Reset to default
+          </Button>
+          <Button size="sm" onClick={() => onOpenChange(false)} className="px-5">
+            Done
+          </Button>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
 // ─── Main component ──────────────────────────────────────────────────────────
 
 export function ReviewResponseAgentsView() {
@@ -486,6 +897,19 @@ export function ReviewResponseAgentsView() {
   const [creatingAgent, setCreatingAgent] = useState(false);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [filterOpen, setFilterOpen] = useState(false);
+  const [columnsDrawerOpen, setColumnsDrawerOpen] = useState(false);
+  const [columnState, setColumnState] = useState<ColumnState>(() => loadColumnState());
+
+  useEffect(() => {
+    saveColumnState(columnState);
+  }, [columnState]);
+
+  const orderedVisibleColumns = useMemo(() => {
+    const byId = new Map(DEFAULT_COLUMNS.map((c) => [c.id, c]));
+    return columnState.order
+      .map((id) => byId.get(id))
+      .filter((c): c is ColumnDef => Boolean(c) && columnState.visibility[c!.id]);
+  }, [columnState]);
   const [filters, setFilters] = useState<FilterItem[]>([
     {
       id: "rra_location",
@@ -528,11 +952,13 @@ export function ReviewResponseAgentsView() {
             MOCK_AGENTS.reduce((sum, a) => sum + timeToMinutes(a.avgResponseTime), 0) / count
           );
     const timeSaved = MOCK_AGENTS.reduce((sum, a) => sum + timeToMinutes(a.timeSaved), 0);
+    const reviewsSpammed = MOCK_AGENTS.reduce((sum, a) => sum + a.spammedReviews, 0);
     return {
       reviewsResponded: reviewsResponded.toLocaleString(),
       responseRate: `${responseRate}%`,
       avgResponseTime: formatMinutes(avgResponseTime),
       timeSaved: formatMinutes(timeSaved),
+      reviewsSpammed: reviewsSpammed.toLocaleString(),
     };
   }, []);
 
@@ -566,6 +992,15 @@ export function ReviewResponseAgentsView() {
           break;
         case "locations":
           cmp = a.locations - b.locations;
+          break;
+        case "reviewSpam":
+          cmp = (a.reviewSpam ? 1 : 0) - (b.reviewSpam ? 1 : 0);
+          break;
+        case "lastRun":
+          cmp = a.lastRun.localeCompare(b.lastRun);
+          break;
+        case "createdBy":
+          cmp = a.createdBy.localeCompare(b.createdBy);
           break;
       }
       return sortDir === "asc" ? cmp : -cmp;
@@ -631,6 +1066,31 @@ export function ReviewResponseAgentsView() {
               >
                 <Search className="h-4 w-4" />
               </Button>
+            )}
+            {tab === "agents" && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className={`h-9 w-9 ${
+                      columnsDrawerOpen
+                        ? "bg-[#e8effe] dark:bg-[#1e2d5e] border-[#2552ED] dark:border-[#2552ED]"
+                        : ""
+                    }`}
+                    aria-label="Customize columns"
+                    aria-pressed={columnsDrawerOpen}
+                    onClick={() => setColumnsDrawerOpen(true)}
+                  >
+                    <Columns3
+                      className={`h-4 w-4 ${
+                        columnsDrawerOpen ? "text-[#1E44CC]" : "text-[#555] dark:text-[#8b92a5]"
+                      }`}
+                    />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Customize columns</TooltipContent>
+              </Tooltip>
             )}
             {tab === "agents" ? (
               <Button
@@ -720,78 +1180,60 @@ export function ReviewResponseAgentsView() {
           </div>
         )}
 
-        {tab === "agents" && (
-        <div className="px-6 pt-6">
-          <div className="grid grid-cols-4 gap-5">
-            <MetricCard label="Reviews responded" value={metrics.reviewsResponded} trend="+1.3%" />
-            <MetricCard label="Response rate" value={metrics.responseRate} trend="+1.3%" />
-            <MetricCard label="Average response time" value={metrics.avgResponseTime} trend="+1.3%" />
-            <MetricCard label="Time saved" value={metrics.timeSaved} trend="+1.3%" customize />
-          </div>
-        </div>
-        )}
+        {tab === "agents" && (() => {
+          const metricCards: { key: string; node: React.ReactNode }[] = [
+            { key: "reviewsResponded", node: <MetricCard label="Reviews responded" value={metrics.reviewsResponded} trend="+1.3%" /> },
+            { key: "responseRate", node: <MetricCard label="Response rate" value={metrics.responseRate} trend="+1.3%" /> },
+            { key: "avgResponseTime", node: <MetricCard label="Average response time" value={metrics.avgResponseTime} trend="+1.3%" /> },
+            { key: "timeSaved", node: <MetricCard label="Time saved" value={metrics.timeSaved} trend="+1.3%" /> },
+          ];
+          if (columnState.visibility.reviewSpam) {
+            metricCards.push({
+              key: "reviewsSpammed",
+              node: <MetricCard label="Reviews spammed" value={metrics.reviewsSpammed} trend="-0.4%" positive={false} customize />,
+            });
+          }
+          const fitsWithoutScroll = metricCards.length <= 4;
+          return (
+            <div className="px-6 pt-6">
+              {fitsWithoutScroll ? (
+                <div
+                  className="grid gap-5"
+                  style={{ gridTemplateColumns: `repeat(${metricCards.length}, minmax(0, 1fr))` }}
+                >
+                  {metricCards.map((c) => (
+                    <div key={c.key}>{c.node}</div>
+                  ))}
+                </div>
+              ) : (
+                <MetricScroller>
+                  {metricCards.map((c) => (
+                    <div key={c.key} className="min-w-[260px] flex-shrink-0">
+                      {c.node}
+                    </div>
+                  ))}
+                </MetricScroller>
+              )}
+            </div>
+          );
+        })()}
 
         {tab === "agents" && <div className="px-6 py-6">
           <div className="overflow-hidden rounded-[8px] border border-[#eaeaea] bg-white dark:border-[#252b35] dark:bg-[#1e2229]">
             <Table>
               <TableHeader>
                 <TableRow className="border-b border-[#eaeaea] bg-[#fafbfc] hover:bg-[#fafbfc] dark:border-[#252b35] dark:bg-[#181c24] dark:hover:bg-[#181c24]">
-                  <SortableHead
-                    label="Agent name"
-                    sortKey="name"
-                    activeKey={sortKey}
-                    direction={sortDir}
-                    onSort={handleSort}
-                    className="w-[360px] min-w-[280px]"
-                  />
-                  <SortableHead
-                    label="Status"
-                    sortKey="status"
-                    activeKey={sortKey}
-                    direction={sortDir}
-                    onSort={handleSort}
-                    className="w-[140px]"
-                  />
-                  <SortableHead
-                    label="Reviews responded"
-                    sortKey="reviewsResponded"
-                    activeKey={sortKey}
-                    direction={sortDir}
-                    onSort={handleSort}
-                    className="w-[180px]"
-                  />
-                  <SortableHead
-                    label="Response rate"
-                    sortKey="responseRate"
-                    activeKey={sortKey}
-                    direction={sortDir}
-                    onSort={handleSort}
-                    className="w-[150px]"
-                  />
-                  <SortableHead
-                    label="Avg response time"
-                    sortKey="avgResponseTime"
-                    activeKey={sortKey}
-                    direction={sortDir}
-                    onSort={handleSort}
-                    className="w-[180px]"
-                  />
-                  <SortableHead
-                    label="Time saved"
-                    sortKey="timeSaved"
-                    activeKey={sortKey}
-                    direction={sortDir}
-                    onSort={handleSort}
-                    className="w-[150px]"
-                  />
-                  <SortableHead
-                    label="Locations"
-                    sortKey="locations"
-                    activeKey={sortKey}
-                    direction={sortDir}
-                    onSort={handleSort}
-                    className="w-[140px]"
-                  />
+                  {orderedVisibleColumns.map((col) => (
+                    <SortableHead
+                      key={col.id}
+                      label={col.label}
+                      sortKey={col.sortKey}
+                      activeKey={sortKey}
+                      direction={sortDir}
+                      onSort={handleSort}
+                      className={col.width}
+                    />
+                  ))}
                   <TableHead className="w-[72px] px-5" />
                 </TableRow>
               </TableHeader>
@@ -801,32 +1243,77 @@ export function ReviewResponseAgentsView() {
                     key={agent.id}
                     className="border-b border-[#f0f2f5] last:border-b-0 hover:bg-[#fafbfc] dark:border-[#252b35] dark:hover:bg-[#181c24]"
                   >
-                    <TableCell className="h-[72px] whitespace-normal px-5 py-5 text-[14px] font-light leading-[20px] tracking-[-0.28px] text-[#212121] dark:text-[#e4e4e4]">
-                      <button
-                        type="button"
-                        className="text-left font-light transition-colors hover:text-[#1976d2] dark:hover:text-[#60a5fa]"
-                      >
-                        {agent.name}
-                      </button>
-                    </TableCell>
-                    <TableCell className="h-[72px] px-5 py-5">
-                      <StatusBadge status={agent.status} />
-                    </TableCell>
-                    <TableCell className="h-[72px] px-5 py-5 text-[14px] text-[#212121] dark:text-[#e4e4e4]">
-                      {agent.reviewsResponded.toLocaleString()}
-                    </TableCell>
-                    <TableCell className="h-[72px] px-5 py-5 text-[14px] text-[#212121] dark:text-[#e4e4e4]">
-                      {agent.responseRate}%
-                    </TableCell>
-                    <TableCell className="h-[72px] px-5 py-5 text-[14px] text-[#212121] dark:text-[#e4e4e4]">
-                      {agent.avgResponseTime}
-                    </TableCell>
-                    <TableCell className="h-[72px] px-5 py-5 text-[14px] text-[#212121] dark:text-[#e4e4e4]">
-                      {agent.timeSaved}
-                    </TableCell>
-                    <TableCell className="h-[72px] px-5 py-5">
-                      <LocationsCell count={agent.locations} locations={agent.locationNames} />
-                    </TableCell>
+                    {orderedVisibleColumns.map((col) => {
+                      switch (col.id) {
+                        case "name":
+                          return (
+                            <TableCell key={col.id} className="h-[72px] whitespace-normal px-5 py-5 text-[14px] font-light leading-[20px] tracking-[-0.28px] text-[#212121] dark:text-[#e4e4e4]">
+                              <button
+                                type="button"
+                                className="text-left font-light transition-colors hover:text-[#1976d2] dark:hover:text-[#60a5fa]"
+                              >
+                                {agent.name}
+                              </button>
+                            </TableCell>
+                          );
+                        case "status":
+                          return (
+                            <TableCell key={col.id} className="h-[72px] px-5 py-5">
+                              <StatusBadge status={agent.status} />
+                            </TableCell>
+                          );
+                        case "reviewsResponded":
+                          return (
+                            <TableCell key={col.id} className="h-[72px] px-5 py-5 text-[14px] text-[#212121] dark:text-[#e4e4e4]">
+                              {agent.reviewsResponded.toLocaleString()}
+                            </TableCell>
+                          );
+                        case "responseRate":
+                          return (
+                            <TableCell key={col.id} className="h-[72px] px-5 py-5 text-[14px] text-[#212121] dark:text-[#e4e4e4]">
+                              {agent.responseRate}%
+                            </TableCell>
+                          );
+                        case "avgResponseTime":
+                          return (
+                            <TableCell key={col.id} className="h-[72px] px-5 py-5 text-[14px] text-[#212121] dark:text-[#e4e4e4]">
+                              {agent.avgResponseTime}
+                            </TableCell>
+                          );
+                        case "timeSaved":
+                          return (
+                            <TableCell key={col.id} className="h-[72px] px-5 py-5 text-[14px] text-[#212121] dark:text-[#e4e4e4]">
+                              {agent.timeSaved}
+                            </TableCell>
+                          );
+                        case "locations":
+                          return (
+                            <TableCell key={col.id} className="h-[72px] px-5 py-5">
+                              <LocationsCell count={agent.locations} locations={agent.locationNames} />
+                            </TableCell>
+                          );
+                        case "reviewSpam":
+                          return (
+                            <TableCell key={col.id} className="h-[72px] px-5 py-5">
+                              <ReviewSpamBadge value={agent.reviewSpam} />
+                            </TableCell>
+                          );
+                        case "lastRun":
+                          return (
+                            <TableCell key={col.id} className="h-[72px] px-5 py-5 text-[14px] text-[#212121] dark:text-[#e4e4e4]">
+                              {agent.lastRun}
+                            </TableCell>
+                          );
+                        case "createdBy":
+                          return (
+                            <TableCell key={col.id} className="h-[72px] px-5 py-5 text-[14px] text-[#212121] dark:text-[#e4e4e4]">
+                              {agent.createdBy}
+                            </TableCell>
+                          );
+                        default:
+                          return null;
+                      }
+                    })}
                     <TableCell className="h-[72px] px-5 py-5 text-right">
                       <DropdownMenu>
                         <DropdownMenuTrigger
@@ -873,7 +1360,7 @@ export function ReviewResponseAgentsView() {
                 {filteredSorted.length === 0 && (
                   <TableRow>
                     <TableCell
-                      colSpan={8}
+                      colSpan={orderedVisibleColumns.length + 1}
                       className="py-16 text-center text-[14px] text-[#9ba2b0]"
                     >
                       No agents match your search.
@@ -894,6 +1381,13 @@ export function ReviewResponseAgentsView() {
           />
         )}
       </div>
+
+      <ColumnsCustomizer
+        open={columnsDrawerOpen}
+        onOpenChange={setColumnsDrawerOpen}
+        state={columnState}
+        onChange={setColumnState}
+      />
     </div>
   );
 }

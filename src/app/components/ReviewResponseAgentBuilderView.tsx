@@ -2651,9 +2651,7 @@ function TriggerTypePicker({
             </p>
             <div className="flex flex-col gap-0.5">
               {filteredTypes.map((t) => {
-                const TypeIcon = t.icon;
                 const isHovered = t.id === activeType.id;
-                const isCurrent = t.id === currentTypeId;
                 return (
                   <button
                     key={t.id}
@@ -2666,11 +2664,7 @@ function TriggerTypePicker({
                         : "text-[#212121] hover:bg-[#f4f6f7] dark:text-[#e4e4e4] dark:hover:bg-[#262b35]"
                     }`}
                   >
-                    <TypeIcon className="h-4 w-4 shrink-0 text-[#6b7280] dark:text-[#9ba2b0]" />
                     <span className="flex-1 truncate">{t.label}</span>
-                    {isCurrent && (
-                      <Check className="h-3.5 w-3.5 shrink-0 text-[#1976d2] dark:text-[#5b9bf5]" />
-                    )}
                     {(t.subOptions?.length ?? 0) > 0 && (
                       <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[#9ca3af] dark:text-[#6b7280]" />
                     )}
@@ -2702,7 +2696,6 @@ function TriggerTypePicker({
                 {activeType.subOptions.map((sub) => {
                   const isCurrent =
                     activeType.id === currentTypeId && sub.id === currentSubId;
-                  const SubIcon = activeType.icon;
                   return (
                     <button
                       key={sub.id}
@@ -2714,9 +2707,6 @@ function TriggerTypePicker({
                           : "border-[#e5e9f0] bg-white hover:border-[#c4d5e9] hover:bg-[#f8fafc] dark:border-[#333a47] dark:bg-[#262b35] dark:hover:border-[#5580e0]"
                       }`}
                     >
-                      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-[#f4f6f7] dark:bg-[#1e2229]">
-                        <SubIcon className="h-3.5 w-3.5 text-[#6b7280] dark:text-[#9ba2b0]" />
-                      </div>
                       <div className="flex min-w-0 flex-1 flex-col gap-1">
                         <span className="text-sm font-medium leading-5 text-[#212121] dark:text-[#f3f4f6]">
                           {sub.label}
@@ -2782,7 +2772,6 @@ function TriggerConfigPanel({
 
   const currentType =
     TRIGGER_OPTIONS.find((t) => t.id === currentTypeId) ?? TRIGGER_OPTIONS[0];
-  const CurrentTypeIcon = currentType.icon;
 
   return (
     <aside className="flex w-[340px] shrink-0 flex-col rounded-lg bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04)] animate-in slide-in-from-right-4 fade-in duration-300 ease-out dark:bg-[#1e2229]">
@@ -2825,11 +2814,7 @@ function TriggerConfigPanel({
                 type="button"
                 className="flex h-9 w-full items-center gap-2 rounded-md border border-[#e5e9f0] bg-white px-3 text-sm text-[#212121] transition-colors hover:border-[#c4d5e9] hover:bg-[#f8fafc] dark:border-[#333a47] dark:bg-[#262b35] dark:text-[#e4e4e4] dark:hover:border-[#5580e0]"
               >
-                <CurrentTypeIcon className="h-4 w-4 shrink-0 text-[#6b7280] dark:text-[#9ba2b0]" />
                 <span className="flex-1 truncate text-left">{currentType.label}</span>
-                <span className="text-xs font-medium text-[#1976d2] dark:text-[#5b9bf5]">
-                  Change
-                </span>
                 <ChevronDown className="h-4 w-4 shrink-0 text-[#9ca3af] dark:text-[#6b7280]" />
               </button>
             }
