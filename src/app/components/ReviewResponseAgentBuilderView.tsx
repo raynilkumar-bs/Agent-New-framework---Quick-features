@@ -3202,19 +3202,49 @@ export function TaskExpandedDialog({
   onPromptChange,
 }: TaskExpandedDialogProps) {
   const [previewState, setPreviewState] = useState<PreviewState>("idle");
+  const [dirtySinceRun, setDirtySinceRun] = useState(false);
 
   // Reset preview when the dialog closes so reopening starts fresh.
   useEffect(() => {
-    if (!open) setPreviewState("idle");
+    if (!open) {
+      setPreviewState("idle");
+      setDirtySinceRun(false);
+    }
   }, [open]);
 
   const handleRun = () => {
+    setDirtySinceRun(false);
     setPreviewState("running");
     window.setTimeout(() => setPreviewState("ready"), RUNNING_TOTAL_DURATION_MS);
   };
 
+  const handleNameChange = (next: string) => {
+    setDirtySinceRun(true);
+    onNameChange(next);
+  };
+  const handleDescriptionChange = (next: string) => {
+    setDirtySinceRun(true);
+    onDescriptionChange(next);
+  };
+  const handlePromptChange = (next: string) => {
+    setDirtySinceRun(true);
+    onPromptChange(next);
+  };
+
+  const isRunning = previewState === "running";
+  // Run task is enabled when in idle, or when ready + the user has edited
+  // something on the LHS since the last run.
+  const canRun = previewState === "idle" || dirtySinceRun;
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        // Block close (X / ESC / overlay click) while a run is in flight.
+        if (isRunning && !next) return;
+        onOpenChange(next);
+      }}
+    >
       <DialogPortal>
         <DialogOverlay />
         <DialogPrimitive.Content
@@ -3227,25 +3257,35 @@ export function TaskExpandedDialog({
             </DialogPrimitive.Title>
             <DialogPrimitive.Close
               aria-label="Close"
-              className="flex h-7 w-7 items-center justify-center rounded text-[#6b7280] transition-colors hover:bg-[#f4f6f7] hover:text-[#212121] dark:text-[#9ba2b0] dark:hover:bg-[#262b35] dark:hover:text-[#f3f4f6]"
+              disabled={isRunning}
+              className="flex h-7 w-7 items-center justify-center rounded text-[#6b7280] transition-colors hover:bg-[#f4f6f7] hover:text-[#212121] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[#6b7280] dark:text-[#9ba2b0] dark:hover:bg-[#262b35] dark:hover:text-[#f3f4f6]"
             >
               <X className="h-4 w-4" />
             </DialogPrimitive.Close>
           </header>
 
           <div className="grid flex-1 min-h-0 grid-cols-2">
-            <div className="flex flex-col gap-5 overflow-y-auto border-r border-[#e5e9f0] px-6 py-6 dark:border-[#252b35]">
+            <div
+              className={`flex flex-col gap-5 overflow-y-auto border-r border-[#e5e9f0] px-6 py-6 transition-opacity duration-200 dark:border-[#252b35] ${
+                isRunning ? "pointer-events-none opacity-60" : ""
+              }`}
+              aria-disabled={isRunning}
+            >
               <TaskFieldStack
                 name={name}
-                onNameChange={onNameChange}
+                onNameChange={handleNameChange}
                 description={description}
-                onDescriptionChange={onDescriptionChange}
+                onDescriptionChange={handleDescriptionChange}
                 prompt={prompt}
-                onPromptChange={onPromptChange}
+                onPromptChange={handlePromptChange}
               />
             </div>
             <div className="flex min-h-0 flex-col overflow-hidden bg-[#f4f6f7] dark:bg-[#1a1d23]">
-              <TaskPreviewPane state={previewState} onRun={handleRun} />
+              <TaskPreviewPane
+                state={previewState}
+                onRun={handleRun}
+                canRun={canRun}
+              />
             </div>
           </div>
 
@@ -3259,6 +3299,7 @@ export function TaskExpandedDialog({
               <Button
                 variant="ghost"
                 size="sm"
+                disabled={isRunning}
                 className="h-9 px-4 text-[#1976d2] hover:bg-[#ecf2fb] dark:text-[#5b9bf5] dark:hover:bg-[#1c2c4a]"
                 onClick={() => onOpenChange(false)}
               >
@@ -3266,6 +3307,7 @@ export function TaskExpandedDialog({
               </Button>
               <Button
                 size="sm"
+                disabled={isRunning}
                 className="h-9 px-4"
                 onClick={() => onOpenChange(false)}
               >
@@ -3320,9 +3362,11 @@ const PREVIEW_TOOL_PROPERTY_COUNT = 6;
 function TaskPreviewPane({
   state,
   onRun,
+  canRun,
 }: {
   state: PreviewState;
   onRun: () => void;
+  canRun: boolean;
 }) {
   if (state === "idle") {
     return (
@@ -3361,7 +3405,8 @@ function TaskPreviewPane({
         <button
           type="button"
           onClick={onRun}
-          className="inline-flex h-8 items-center gap-1.5 rounded-md bg-[#ecf2fb] px-3 text-xs font-medium text-[#1976d2] transition-colors hover:bg-[#dde7f4] dark:bg-[#1c2c4a] dark:text-[#5b9bf5] dark:hover:bg-[#1f3357]"
+          disabled={!canRun}
+          className="inline-flex h-8 items-center gap-1.5 rounded-md bg-[#ecf2fb] px-3 text-xs font-medium text-[#1976d2] transition-colors hover:bg-[#dde7f4] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-[#ecf2fb] dark:bg-[#1c2c4a] dark:text-[#5b9bf5] dark:hover:bg-[#1f3357] dark:disabled:hover:bg-[#1c2c4a]"
         >
           <Play className="h-3.5 w-3.5 fill-current" />
           Run task
