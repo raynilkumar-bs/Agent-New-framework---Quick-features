@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState, type DragEvent as ReactDragEvent } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type DragEvent as ReactDragEvent } from "react";
 import {
   ArrowLeft,
   CloudUpload,
@@ -41,6 +41,7 @@ import {
   Check,
   Undo2,
   Redo2,
+  Settings,
 } from "lucide-react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import {
@@ -75,9 +76,28 @@ import {
   PromptInputTextarea,
   PROMPT_INPUT_PRIMARY_ICON_SEND_CLASSNAME,
 } from "@/app/components/ui/prompt-input";
+import {
+  Tabs,
+  TabsList,
+  TabsTrigger,
+  TabsContent,
+} from "@/app/components/ui/tabs";
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from "@/app/components/ui/tooltip";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/app/components/ui/select";
 import { useRequestChromeless } from "@/app/context/ChromeContext";
 import { ContextPickerDialog } from "@/app/components/ContextPickerDialog";
 import { BranchConfigPanel } from "@/app/components/BranchConfigPanel";
+import { PreviewSettingsDialog } from "@/app/components/PreviewSettingsDialog";
 
 function TaskIcon({ className }: { className?: string }) {
   return (
@@ -895,6 +915,7 @@ export function ReviewResponseAgentBuilderView({ onBack }: Props) {
         {creating && selectedTask ? (
           <TaskConfigPanel
             key={`task-${selectedTask.id}`}
+            taskKey={selectedTask.subId}
             name={selectedTask.label}
             onNameChange={(label) => updateTask(selectedTask.id, { label })}
             description={selectedTask.description}
@@ -2902,6 +2923,7 @@ interface TaskConfigPanelProps {
   prompt: string;
   onPromptChange: (next: string) => void;
   onClose: () => void;
+  taskKey?: string;
 }
 
 const DEFAULT_CONTEXT_CHIPS = [
@@ -2934,6 +2956,7 @@ function TaskConfigPanel({
   prompt,
   onPromptChange,
   onClose,
+  taskKey,
 }: TaskConfigPanelProps) {
   const [expanded, setExpanded] = useState(false);
   return (
@@ -2993,6 +3016,7 @@ function TaskConfigPanel({
         onDescriptionChange={onDescriptionChange}
         prompt={prompt}
         onPromptChange={onPromptChange}
+        taskKey={taskKey}
       />
     </aside>
   );
@@ -3187,6 +3211,7 @@ interface TaskExpandedDialogProps {
   onDescriptionChange: (next: string) => void;
   prompt: string;
   onPromptChange: (next: string) => void;
+  taskKey?: string;
 }
 
 type PreviewState = "idle" | "running" | "ready";
@@ -3200,6 +3225,7 @@ export function TaskExpandedDialog({
   onDescriptionChange,
   prompt,
   onPromptChange,
+  taskKey,
 }: TaskExpandedDialogProps) {
   const [previewState, setPreviewState] = useState<PreviewState>("idle");
   const [dirtySinceRun, setDirtySinceRun] = useState(false);
@@ -3285,6 +3311,8 @@ export function TaskExpandedDialog({
                 state={previewState}
                 onRun={handleRun}
                 canRun={canRun}
+                taskKey={taskKey}
+                onCloseDialog={() => onOpenChange(false)}
               />
             </div>
           </div>
@@ -3322,13 +3350,153 @@ export function TaskExpandedDialog({
 }
 
 type PreviewRow =
-  | { id: string; kind: "number" | "string"; value: string }
+  | {
+      id: string;
+      kind: "number" | "string";
+      value: string;
+      inputType?: "text" | "dropdown";
+      options?: string[];
+    }
   | { id: string; kind: "object"; rows: PreviewRow[] };
 
-const PREVIEW_INPUT_ROWS = [
+type EditApi = {
+  editingPath: string | null;
+  draft: string;
+  values: Record<string, string>;
+  isGenerating: boolean;
+  startEdit: (path: string, currentValue: string) => void;
+  cancelEdit: () => void;
+  saveEdit: () => void;
+  setDraft: (value: string) => void;
+  runAi: (rowId: string) => void;
+};
+
+const COUNTRY_OPTIONS = ["US", "CA", "UK", "AU"];
+const AI_MOCK_BY_ID: Record<string, string> = {
+  review_text:
+    "Excellent service. Highly professional staff and a stress-free experience from start to finish.",
+  reviewer_name: "Alex Morgan",
+  reviewDate: "Mon, Apr 14, 2026 09:32 AM",
+  businessAggId: "9651531",
+  name: "Alex Morgan",
+  email: "alex.morgan@example.com",
+  phone: "+1 555-7788",
+};
+const AI_MOCK_DEFAULT = "Auto-generated content";
+function getAiMock(rowId: string): string {
+  return AI_MOCK_BY_ID[rowId] ?? AI_MOCK_DEFAULT;
+}
+
+const PREVIEW_INPUT_FIELD_ROWS: PreviewRow[] = [
   {
     id: "review_text",
-    value: "I went for a root canal, Mr.John was very professional",
+    kind: "string",
+    value: "\"I went for a root canal, Mr.John was very professional\"",
+    inputType: "text",
+  },
+  { id: "reviewer_name", kind: "string", value: "\"Mr. John\"", inputType: "text" },
+  {
+    id: "overallRating",
+    kind: "number",
+    value: "5",
+    inputType: "dropdown",
+    options: ["1", "2", "3", "4", "5"],
+  },
+  {
+    id: "sourceType",
+    kind: "string",
+    value: "\"Google\"",
+    inputType: "dropdown",
+    options: ["Google", "Yelp", "Facebook", "Tripadvisor"],
+  },
+  {
+    id: "reviewDate",
+    kind: "string",
+    value: "\"Fri, Mar 27, 2026 12:46 AM\"",
+    inputType: "text",
+  },
+  { id: "businessAggId", kind: "number", value: "9651531", inputType: "text" },
+  {
+    id: "reviewer",
+    kind: "object",
+    rows: [
+      { id: "name", kind: "string", value: "\"John Doe\"", inputType: "text" },
+      {
+        id: "email",
+        kind: "string",
+        value: "\"john@example.com\"",
+        inputType: "text",
+      },
+      {
+        id: "contact",
+        kind: "object",
+        rows: [
+          {
+            id: "phone",
+            kind: "string",
+            value: "\"+1 555-0123\"",
+            inputType: "text",
+          },
+          {
+            id: "country",
+            kind: "string",
+            value: "\"US\"",
+            inputType: "dropdown",
+            options: COUNTRY_OPTIONS,
+          },
+          {
+            id: "emergency",
+            kind: "object",
+            rows: [
+              {
+                id: "phone",
+                kind: "string",
+                value: "\"+1 555-9999\"",
+                inputType: "text",
+              },
+              {
+                id: "country",
+                kind: "string",
+                value: "\"US\"",
+                inputType: "dropdown",
+                options: COUNTRY_OPTIONS,
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  },
+  {
+    id: "language",
+    kind: "string",
+    value: "\"en-US\"",
+    inputType: "dropdown",
+    options: ["en-US", "en-GB", "es-ES", "fr-FR"],
+  },
+  {
+    id: "status",
+    kind: "number",
+    value: "2",
+    inputType: "dropdown",
+    options: ["Open", "Pending", "Resolved", "Closed"],
+  },
+  { id: "responseDraft", kind: "string", value: "", inputType: "text" },
+  { id: "internalNote", kind: "string", value: "", inputType: "text" },
+  { id: "tags", kind: "string", value: "", inputType: "text" },
+  {
+    id: "assignee",
+    kind: "string",
+    value: "",
+    inputType: "dropdown",
+    options: ["Unassigned", "Sarah K.", "Marcus L.", "Priya R."],
+  },
+  {
+    id: "priority",
+    kind: "string",
+    value: "",
+    inputType: "dropdown",
+    options: ["Low", "Medium", "High", "Urgent"],
   },
 ];
 
@@ -3363,11 +3531,100 @@ function TaskPreviewPane({
   state,
   onRun,
   canRun,
+  taskKey,
+  onCloseDialog,
 }: {
   state: PreviewState;
   onRun: () => void;
   canRun: boolean;
+  taskKey?: string;
+  onCloseDialog?: () => void;
 }) {
+  const isDraftReply = taskKey === "draft-reply";
+  const [variantOverride, setVariantOverride] = useState<"default" | null>(
+    null,
+  );
+  const [configureOpen, setConfigureOpen] = useState(false);
+  const variant: "default" | "branch-not-executed" =
+    isDraftReply && variantOverride !== "default"
+      ? "branch-not-executed"
+      : "default";
+
+  const handleRunWithReview = (_reviewId: string) => {
+    setVariantOverride("default");
+    setConfigureOpen(false);
+    onRun();
+  };
+  const [activeTab, setActiveTab] = useState<"input" | "output">("output");
+
+  useEffect(() => {
+    if (state === "ready") setActiveTab("output");
+  }, [state]);
+
+  const [editingPath, setEditingPath] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [isGenerating, setIsGenerating] = useState(false);
+  const aiTimerRef = useRef<number | null>(null);
+
+  const tablistWrapperRef = useRef<HTMLDivElement>(null);
+  const [indicator, setIndicator] = useState<{ left: number; width: number }>({
+    left: 0,
+    width: 0,
+  });
+
+  useLayoutEffect(() => {
+    if (state !== "ready") return;
+    const wrapper = tablistWrapperRef.current;
+    if (!wrapper) return;
+    const active = wrapper.querySelector<HTMLElement>(
+      '[data-slot="tabs-trigger"][data-state="active"]',
+    );
+    if (!active) return;
+    setIndicator({ left: active.offsetLeft, width: active.offsetWidth });
+  }, [activeTab, state]);
+
+  useEffect(() => {
+    return () => {
+      if (aiTimerRef.current) window.clearTimeout(aiTimerRef.current);
+    };
+  }, []);
+
+  const editApi: EditApi = {
+    editingPath,
+    draft,
+    values,
+    isGenerating,
+    startEdit: (path, currentValue) => {
+      if (aiTimerRef.current) window.clearTimeout(aiTimerRef.current);
+      setEditingPath(path);
+      setDraft(currentValue);
+      setIsGenerating(false);
+    },
+    cancelEdit: () => {
+      if (aiTimerRef.current) window.clearTimeout(aiTimerRef.current);
+      setEditingPath(null);
+      setIsGenerating(false);
+    },
+    saveEdit: () => {
+      if (editingPath) {
+        setValues((v) => ({ ...v, [editingPath]: draft }));
+      }
+      setEditingPath(null);
+      setIsGenerating(false);
+    },
+    setDraft,
+    runAi: (rowId) => {
+      if (aiTimerRef.current) window.clearTimeout(aiTimerRef.current);
+      setIsGenerating(true);
+      aiTimerRef.current = window.setTimeout(() => {
+        setDraft(getAiMock(rowId));
+        setIsGenerating(false);
+        aiTimerRef.current = null;
+      }, 700);
+    },
+  };
+
   if (state === "idle") {
     return (
       <div className="flex flex-1 min-h-0 flex-col items-center justify-center gap-5 px-8 py-8 text-center animate-in fade-in duration-300">
@@ -3396,6 +3653,32 @@ function TaskPreviewPane({
     return <RunningStepper />;
   }
 
+  if (variant === "branch-not-executed") {
+    return (
+      <>
+        <div className="flex flex-1 min-h-0 flex-col">
+          <div className="flex shrink-0 items-center justify-between border-b border-[#e5e9f0] bg-[#f4f6f7] px-5 py-4 dark:border-[#252b35] dark:bg-[#1a1d23]">
+            <span className="text-sm font-medium text-[#212121] dark:text-[#f3f4f6]">
+              Preview
+            </span>
+          </div>
+          <BranchNotExecutedState
+            onConfigure={() => setConfigureOpen(true)}
+          />
+        </div>
+        <PreviewSettingsDialog
+          open={configureOpen}
+          onOpenChange={setConfigureOpen}
+          onCloseAll={() => {
+            setConfigureOpen(false);
+            onCloseDialog?.();
+          }}
+          onRunWithReview={handleRunWithReview}
+        />
+      </>
+    );
+  }
+
   return (
     <div className="flex flex-1 min-h-0 flex-col">
       <div className="flex shrink-0 items-center justify-between border-b border-[#e5e9f0] bg-[#f4f6f7] px-5 py-4 dark:border-[#252b35] dark:bg-[#1a1d23]">
@@ -3414,50 +3697,72 @@ function TaskPreviewPane({
       </div>
 
       <div className="flex flex-1 min-h-0 flex-col gap-3 overflow-hidden px-5 py-4 animate-in fade-in slide-in-from-bottom-2 duration-400">
-        <PreviewInputTable rows={PREVIEW_INPUT_ROWS} />
-        <PreviewOutputCard />
-        <PreviewFeedback />
-      </div>
-    </div>
-  );
-}
-
-function PreviewInputTable({
-  rows,
-}: {
-  rows: { id: string; value: string }[];
-}) {
-  return (
-    <div className="flex shrink-0 max-h-[110px] flex-col overflow-hidden rounded-lg border border-[#e5e9f0] bg-white dark:border-[#333a47] dark:bg-[#262b35]">
-      <div className="grid shrink-0 grid-cols-[1fr_1.4fr_28px] items-center gap-2 border-b border-[#e5e9f0] px-3 py-2 text-xs font-medium text-[#6b7280] dark:border-[#333a47] dark:text-[#9ba2b0]">
-        <span>Input fields</span>
-        <span>Values</span>
-        <span />
-      </div>
-      <div className="flex-1 min-h-0 overflow-y-auto">
-        {rows.map((row) => (
+        <Tabs
+          value={activeTab}
+          onValueChange={(v) => setActiveTab(v as "input" | "output")}
+          className="flex flex-1 min-h-0 flex-col gap-3"
+        >
           <div
-            key={row.id}
-            className="grid grid-cols-[1fr_1.4fr_28px] items-start gap-2 px-3 py-2.5"
+            ref={tablistWrapperRef}
+            className="relative shrink-0 self-start"
           >
-            <div>
-              <span className="inline-flex h-6 items-center gap-1 rounded-md bg-[#ecf2fb] px-2 text-xs text-[#212121] dark:bg-[#1c2c4a] dark:text-[#e4e4e4]">
-                <Braces className="h-3 w-3 text-[#1976d2] dark:text-[#5b9bf5]" />
-                <span className="max-w-[140px] truncate">{row.id}</span>
-              </span>
-            </div>
-            <p className="text-xs leading-5 text-[#212121] dark:text-[#e4e4e4]">
-              {row.value}
-            </p>
-            <button
-              type="button"
-              aria-label="More"
-              className="flex h-6 w-6 items-center justify-center rounded text-[#9ca3af] transition-colors hover:bg-[#f4f6f7] hover:text-[#212121] dark:text-[#6b7280] dark:hover:bg-[#262b35] dark:hover:text-[#f3f4f6]"
-            >
-              <MoreVertical className="h-3.5 w-3.5" />
-            </button>
+            <TabsList className="h-auto w-fit gap-3 rounded-none bg-transparent p-0">
+              <TabsTrigger
+                value="input"
+                className="relative h-8 flex-none gap-1.5 rounded-none border-0 bg-transparent px-1 text-xs font-medium text-[#6b7280] shadow-none transition-colors hover:text-[#212121] data-[state=active]:bg-transparent data-[state=active]:text-[#212121] data-[state=active]:shadow-none dark:text-[#9ba2b0] dark:hover:text-[#f3f4f6] dark:data-[state=active]:bg-transparent dark:data-[state=active]:text-[#f3f4f6]"
+              >
+                <span>Input</span>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex">
+                      <Info className="h-3.5 w-3.5 text-[#6b7280] dark:text-[#9ba2b0]" />
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">
+                    Input fields can be editable
+                  </TooltipContent>
+                </Tooltip>
+              </TabsTrigger>
+              <TabsTrigger
+                value="output"
+                className="relative h-8 flex-none rounded-none border-0 bg-transparent px-1 text-xs font-medium text-[#6b7280] shadow-none transition-colors hover:text-[#212121] data-[state=active]:bg-transparent data-[state=active]:text-[#212121] data-[state=active]:shadow-none dark:text-[#9ba2b0] dark:hover:text-[#f3f4f6] dark:data-[state=active]:bg-transparent dark:data-[state=active]:text-[#f3f4f6]"
+              >
+                Output
+              </TabsTrigger>
+            </TabsList>
+            <span
+              aria-hidden
+              className="pointer-events-none absolute bottom-0 h-0.5 bg-[#1976d2] transition-all duration-300 ease-out dark:bg-[#5b9bf5]"
+              style={{ left: indicator.left, width: indicator.width }}
+            />
           </div>
-        ))}
+
+          <TabsContent
+            value="input"
+            className="flex flex-1 min-h-0 flex-col outline-none data-[state=inactive]:hidden"
+          >
+            <JsonInspectorCard
+              className="flex-1 min-h-0"
+              plain
+              edit={editApi}
+              sections={[
+                {
+                  id: "input-fields",
+                  label: "Input fields",
+                  rows: PREVIEW_INPUT_FIELD_ROWS,
+                },
+              ]}
+            />
+          </TabsContent>
+
+          <TabsContent
+            value="output"
+            className="flex flex-1 min-h-0 flex-col gap-3 outline-none data-[state=inactive]:hidden"
+          >
+            <PreviewOutputCard />
+            <PreviewFeedback />
+          </TabsContent>
+        </Tabs>
       </div>
     </div>
   );
@@ -3466,7 +3771,7 @@ function PreviewInputTable({
 function PreviewOutputCard() {
   return (
     <JsonInspectorCard
-      className="shrink-0 max-h-[340px]"
+      className="flex-1 min-h-0"
       sections={[
         {
           id: "agent-output",
@@ -3500,9 +3805,13 @@ export interface JsonInspectorSection {
 export function JsonInspectorCard({
   sections,
   className,
+  plain = false,
+  edit,
 }: {
   sections: JsonInspectorSection[];
   className?: string;
+  plain?: boolean;
+  edit?: EditApi;
 }) {
   const defaultOpen = sections
     .filter((s) => s.defaultOpen !== false)
@@ -3523,16 +3832,25 @@ export function JsonInspectorCard({
               value={section.id}
               className="border-0"
             >
-              <AccordionTrigger className="items-center justify-start gap-0 px-3 py-2 text-xs font-medium text-[#212121] hover:no-underline dark:text-[#f3f4f6] [&>svg]:order-first [&>svg]:mr-1.5 [&>svg]:translate-y-0">
+              <AccordionTrigger className="items-center justify-start gap-0 px-3 py-2 text-xs font-medium text-[#212121] hover:no-underline dark:text-[#f3f4f6] [&>svg:last-child]:hidden [&[data-state=open]>svg:first-child]:rotate-90">
+                <ChevronRight className="size-4 shrink-0 mr-1.5 relative z-[1] bg-white text-[#6b7280] transition-transform duration-200 dark:bg-[#262b35] dark:text-[#9ba2b0]" />
                 <span>{section.label}</span>
               </AccordionTrigger>
               <AccordionContent className="pb-2">
-                <div className="flex flex-col">
+                <div className="relative flex flex-col">
+                  <span
+                    aria-hidden
+                    className="pointer-events-none absolute top-0 bottom-0 w-px bg-[#e5e9f0] dark:bg-[#333a47]"
+                    style={{ left: 20 }}
+                  />
                   {section.rows.map((row, i) => (
                     <JsonInspectorRow
                       key={`${row.id}-${i}`}
                       row={row}
                       depth={1}
+                      plain={plain}
+                      edit={edit}
+                      parentPath={section.id}
                     />
                   ))}
                 </div>
@@ -3548,20 +3866,32 @@ export function JsonInspectorCard({
 function JsonInspectorRow({
   row,
   depth,
+  plain = false,
+  edit,
+  parentPath,
 }: {
   row: PreviewRow;
   depth: number;
+  plain?: boolean;
+  edit?: EditApi;
+  parentPath?: string;
 }) {
-  const paddingLeft = depth * 22 + 12;
+  const chipColumn = depth * 22 + 12;
+  // For object rows, the AccordionTrigger renders a chevron (16px) + 6px gap
+  // before the chip. Shift the row left by 22px so the chip lands at the same
+  // x as sibling leaf chips at this depth.
+  const paddingLeft = row.kind === "object" ? chipColumn - 22 : chipColumn;
+  const path = parentPath ? `${parentPath}.${row.id}` : row.id;
 
   if (row.kind === "object") {
     return (
       <Accordion type="multiple" defaultValue={[row.id]} className="contents">
         <AccordionItem value={row.id} className="border-0">
           <AccordionTrigger
-            className="items-center justify-start gap-0 py-1 pr-3 text-xs font-normal text-[#212121] hover:no-underline dark:text-[#f3f4f6] [&>svg]:order-first [&>svg]:mr-1.5 [&>svg]:translate-y-0"
+            className="items-center justify-start gap-0 py-1 pr-3 text-xs font-normal text-[#212121] hover:no-underline dark:text-[#f3f4f6] [&>svg:last-child]:hidden [&[data-state=open]>svg:first-child]:rotate-90"
             style={{ paddingLeft }}
           >
+            <ChevronRight className="size-4 shrink-0 mr-1.5 relative z-[1] bg-white text-[#6b7280] transition-transform duration-200 dark:bg-[#262b35] dark:text-[#9ba2b0]" />
             <span className="inline-flex items-center gap-2">
               <JsonChip label={row.id} />
               <span className="text-xs text-[#6b7280] dark:text-[#9ba2b0]">
@@ -3570,12 +3900,20 @@ function JsonInspectorRow({
             </span>
           </AccordionTrigger>
           <AccordionContent className="pb-1">
-            <div className="flex flex-col">
+            <div className="relative flex flex-col">
+              <span
+                aria-hidden
+                className="pointer-events-none absolute top-0 bottom-0 w-px bg-[#e5e9f0] dark:bg-[#333a47]"
+                style={{ left: paddingLeft + 8 }}
+              />
               {row.rows.map((child, i) => (
                 <JsonInspectorRow
                   key={`${child.id}-${i}`}
                   row={child}
                   depth={depth + 1}
+                  plain={plain}
+                  edit={edit}
+                  parentPath={path}
                 />
               ))}
             </div>
@@ -3585,17 +3923,152 @@ function JsonInspectorRow({
     );
   }
 
-  const valueClass =
-    row.kind === "number"
-      ? "text-[#1976d2] dark:text-[#5b9bf5]"
-      : "text-[#16a34a] dark:text-[#4ade80]";
+  const savedValue = edit?.values[path];
+  const currentValue = savedValue ?? row.value;
+  const strippedValue = plain
+    ? currentValue.replace(/^"|"$/g, "")
+    : currentValue;
+  const isEmpty = plain && strippedValue.trim() === "";
+  const valueClass = isEmpty
+    ? "text-[6px] text-[#c4c8cf] dark:text-[#4a5260]"
+    : plain
+      ? "text-xs text-[#212121] dark:text-[#e4e4e4]"
+      : row.kind === "number"
+        ? "text-xs text-[#1976d2] dark:text-[#5b9bf5]"
+        : "text-xs text-[#16a34a] dark:text-[#4ade80]";
+  const displayValue = isEmpty ? "—" : strippedValue;
+
+  if (edit && edit.editingPath === path) {
+    return (
+      <EditableLeafRow
+        row={row}
+        path={path}
+        paddingLeft={paddingLeft}
+        edit={edit}
+      />
+    );
+  }
+
   return (
     <div
-      className="flex items-center gap-2 py-1 pr-3"
+      className="group relative flex items-center gap-2 py-1 pr-3"
       style={{ paddingLeft }}
     >
       <JsonChip label={row.id} />
-      <span className={`truncate text-xs ${valueClass}`}>{row.value}</span>
+      <span className={`truncate ${valueClass}`}>{displayValue}</span>
+      {edit ? (
+        <button
+          type="button"
+          aria-label={`Edit ${row.id}`}
+          onClick={() => {
+            const seed = plain
+              ? currentValue.replace(/^"|"$/g, "")
+              : currentValue;
+            edit.startEdit(path, seed);
+          }}
+          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-[#9ca3af] opacity-0 transition-opacity hover:bg-[#f4f6f7] hover:text-[#212121] group-hover:opacity-100 focus:opacity-100 dark:text-[#6b7280] dark:hover:bg-[#1a1d23] dark:hover:text-[#f3f4f6]"
+        >
+          <PencilLine className="h-3.5 w-3.5" />
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function EditableLeafRow({
+  row,
+  path,
+  paddingLeft,
+  edit,
+}: {
+  row: Extract<PreviewRow, { kind: "number" | "string" }>;
+  path: string;
+  paddingLeft: number;
+  edit: EditApi;
+}) {
+  const isDropdown = row.inputType === "dropdown";
+  const options = row.options ?? [];
+
+  return (
+    <div
+      className="group relative flex items-center gap-2 py-1 pr-3"
+      style={{ paddingLeft }}
+    >
+      <JsonChip label={row.id} />
+      {isDropdown ? (
+        <Select
+          value={edit.draft}
+          onValueChange={(v) => edit.setDraft(v)}
+        >
+          <SelectTrigger
+            size="sm"
+            className="h-7 w-[180px] text-xs"
+            autoFocus
+          >
+            <SelectValue placeholder="Select" />
+          </SelectTrigger>
+          <SelectContent>
+            {options.map((opt) => (
+              <SelectItem key={opt} value={opt} className="text-xs">
+                {opt}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      ) : (
+        <div className="relative flex-1 min-w-0 max-w-[320px]">
+          <input
+            autoFocus
+            value={edit.draft}
+            disabled={edit.isGenerating}
+            onChange={(e) => edit.setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                edit.saveEdit();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                edit.cancelEdit();
+              }
+            }}
+            className="h-7 w-full rounded-md border border-[#e5e9f0] bg-white px-2 pr-8 text-xs text-[#212121] outline-none transition-colors focus:border-[#1976d2] disabled:opacity-70 dark:border-[#333a47] dark:bg-[#1e2229] dark:text-[#e4e4e4] dark:focus:border-[#5b9bf5]"
+          />
+          {edit.isGenerating ? (
+            <span
+              aria-hidden
+              className="pointer-events-none absolute inset-y-0 left-0 right-0 overflow-hidden rounded-md"
+            >
+              <span className="preview-progress-shimmer absolute inset-y-0 left-0 w-1/3 bg-gradient-to-r from-transparent via-[#1976d2]/15 to-transparent" />
+            </span>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => edit.runAi(row.id)}
+            disabled={edit.isGenerating}
+            aria-label="Generate with AI"
+            className="absolute right-1.5 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-[#1976d2] transition-colors hover:bg-[#ecf2fb] disabled:opacity-50 dark:text-[#5b9bf5] dark:hover:bg-[#1c2c4a]"
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={edit.saveEdit}
+        disabled={edit.isGenerating}
+        aria-label="Save"
+        className="inline-flex h-6 w-6 items-center justify-center rounded text-[#16a34a] hover:bg-[#ecfdf5] disabled:opacity-50 dark:text-[#4ade80] dark:hover:bg-[#0f2c20]"
+      >
+        <Check className="h-3.5 w-3.5" />
+      </button>
+      <button
+        type="button"
+        onClick={edit.cancelEdit}
+        aria-label="Cancel"
+        className="inline-flex h-6 w-6 items-center justify-center rounded text-[#6b7280] hover:bg-[#f4f6f7] hover:text-[#212121] dark:text-[#9ba2b0] dark:hover:bg-[#1a1d23] dark:hover:text-[#f3f4f6]"
+      >
+        <X className="h-3.5 w-3.5" />
+      </button>
     </div>
   );
 }
@@ -3696,6 +4169,55 @@ function RunningStepper() {
             {current.label}
           </span>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function BranchNotExecutedState({
+  onConfigure,
+}: {
+  onConfigure?: () => void;
+}) {
+  return (
+    <div className="flex flex-1 min-h-0 flex-col items-center justify-center gap-5 px-8 py-8 text-center animate-in fade-in duration-300">
+      <BranchNotExecutedIllustration />
+      <div className="flex max-w-[320px] flex-col gap-1">
+        <span className="text-sm font-medium text-[#212121] dark:text-[#f3f4f6]">
+          Branch did not execute
+        </span>
+        <span className="text-xs leading-5 text-[#6b7280] dark:text-[#9ba2b0]">
+          No matching review found for the configured branch conditions.
+          Please try with another record.
+        </span>
+      </div>
+      <Button size="sm" className="h-9 gap-1.5 px-4" onClick={onConfigure}>
+        <Settings className="h-3.5 w-3.5" />
+        Configure
+      </Button>
+    </div>
+  );
+}
+
+function BranchNotExecutedIllustration() {
+  return (
+    <div className="relative flex h-[180px] w-[220px] items-center justify-center rounded-2xl border border-[#dbe2ec] bg-white/60 dark:border-[#333a47] dark:bg-[#262b35]/40">
+      <div className="flex w-[140px] flex-col gap-2.5 rounded-lg border border-[#dbe2ec] bg-white p-3 shadow-[0_1px_3px_rgba(15,23,42,0.04)] dark:border-[#333a47] dark:bg-[#262b35]">
+        <div className="flex items-center gap-2">
+          <div className="h-1.5 w-1.5 rounded-full bg-[#c4d5e9] dark:bg-[#3d4555]" />
+          <div className="h-1.5 flex-1 rounded-full bg-[#c4d5e9] dark:bg-[#3d4555]" />
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="h-1.5 w-1.5 rounded-full bg-[#c4d5e9] dark:bg-[#3d4555]" />
+          <div className="h-1.5 flex-1 rounded-full bg-[#c4d5e9] dark:bg-[#3d4555]" />
+        </div>
+      </div>
+      <span
+        aria-hidden
+        className="pointer-events-none absolute h-0.5 w-[170px] rotate-[-15deg] rounded-full bg-[#f59e0b]/85 dark:bg-[#f59e0b]"
+      />
+      <div className="absolute right-3 top-3 flex h-7 w-7 items-center justify-center rounded-full bg-[#fef3c7] text-[#d97706] dark:bg-[#3a2d10] dark:text-[#f59e0b]">
+        <GitBranch className="h-3.5 w-3.5" />
       </div>
     </div>
   );
