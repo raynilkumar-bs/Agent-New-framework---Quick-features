@@ -4202,7 +4202,7 @@ function BranchNotExecutedState({
 function BranchNotExecutedIllustration() {
   return (
     <div className="relative flex h-[180px] w-[220px] items-center justify-center rounded-2xl border border-[#dbe2ec] bg-white/60 dark:border-[#333a47] dark:bg-[#262b35]/40">
-      <div className="flex w-[140px] flex-col gap-2.5 rounded-lg border border-[#dbe2ec] bg-white p-3 shadow-[0_1px_3px_rgba(15,23,42,0.04)] dark:border-[#333a47] dark:bg-[#262b35]">
+      <div className="relative flex w-[140px] flex-col gap-2.5 rounded-lg border border-[#dbe2ec] bg-white p-3 shadow-[0_1px_3px_rgba(15,23,42,0.04)] dark:border-[#333a47] dark:bg-[#262b35]">
         <div className="flex items-center gap-2">
           <div className="h-1.5 w-1.5 rounded-full bg-[#c4d5e9] dark:bg-[#3d4555]" />
           <div className="h-1.5 flex-1 rounded-full bg-[#c4d5e9] dark:bg-[#3d4555]" />
@@ -4211,13 +4211,9 @@ function BranchNotExecutedIllustration() {
           <div className="h-1.5 w-1.5 rounded-full bg-[#c4d5e9] dark:bg-[#3d4555]" />
           <div className="h-1.5 flex-1 rounded-full bg-[#c4d5e9] dark:bg-[#3d4555]" />
         </div>
-      </div>
-      <span
-        aria-hidden
-        className="pointer-events-none absolute h-0.5 w-[170px] rotate-[-15deg] rounded-full bg-[#f59e0b]/85 dark:bg-[#f59e0b]"
-      />
-      <div className="absolute right-3 top-3 flex h-7 w-7 items-center justify-center rounded-full bg-[#fef3c7] text-[#d97706] dark:bg-[#3a2d10] dark:text-[#f59e0b]">
-        <GitBranch className="h-3.5 w-3.5" />
+        <div className="absolute -bottom-3 -right-3 flex h-8 w-8 items-center justify-center rounded-full bg-[#dc2626] text-white shadow-[0_2px_6px_rgba(220,38,38,0.35)] ring-2 ring-white dark:bg-[#ef4444] dark:ring-[#262b35]">
+          <X className="h-4 w-4" strokeWidth={2.5} />
+        </div>
       </div>
     </div>
   );
