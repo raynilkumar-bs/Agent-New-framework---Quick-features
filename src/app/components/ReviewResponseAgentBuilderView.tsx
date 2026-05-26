@@ -1595,175 +1595,238 @@ function collectByKind(nodes: WorkflowNode[], kind: "task" | "branch"): string[]
   return out;
 }
 
-function diffSnapshots(from: WorkflowSnapshot, to: WorkflowSnapshot) {
-  const changes: Array<{
-    kind: "name" | "trigger" | "task-added" | "task-removed" | "branch-added" | "branch-removed";
-    label: string;
-    before?: string;
-    after?: string;
-  }> = [];
+type DiffEntry = { label: string; status: "added" | "removed" | "unchanged" };
 
-  if (from.title !== to.title) {
-    changes.push({ kind: "name", label: "Agent name", before: from.title, after: to.title });
+function buildDiffEntries(from: string[], to: string[]): DiffEntry[] {
+  const fromSet = new Set(from);
+  const toSet = new Set(to);
+  const seen = new Set<string>();
+  const out: DiffEntry[] = [];
+  for (const label of to) {
+    if (seen.has(label)) continue;
+    seen.add(label);
+    out.push({ label, status: fromSet.has(label) ? "unchanged" : "added" });
   }
-  const fromTrigger = from.placedTrigger?.label ?? "(none)";
-  const toTrigger = to.placedTrigger?.label ?? "(none)";
-  if (fromTrigger !== toTrigger) {
-    changes.push({ kind: "trigger", label: "Trigger", before: fromTrigger, after: toTrigger });
+  for (const label of from) {
+    if (seen.has(label) || toSet.has(label)) continue;
+    seen.add(label);
+    out.push({ label, status: "removed" });
   }
-
-  const fromTasks = collectByKind(from.placedNodes, "task");
-  const toTasks = collectByKind(to.placedNodes, "task");
-  const fromTaskSet = new Set(fromTasks);
-  const toTaskSet = new Set(toTasks);
-  for (const t of toTasks) if (!fromTaskSet.has(t)) changes.push({ kind: "task-added", label: t });
-  for (const t of fromTasks) if (!toTaskSet.has(t)) changes.push({ kind: "task-removed", label: t });
-
-  const fromBranches = collectByKind(from.placedNodes, "branch");
-  const toBranches = collectByKind(to.placedNodes, "branch");
-  const fromBranchSet = new Set(fromBranches);
-  const toBranchSet = new Set(toBranches);
-  for (const b of toBranches) if (!fromBranchSet.has(b)) changes.push({ kind: "branch-added", label: b });
-  for (const b of fromBranches) if (!toBranchSet.has(b)) changes.push({ kind: "branch-removed", label: b });
-
-  return changes;
+  return out;
 }
 
 function CompareBody({ from, to }: { from: WorkflowSnapshot; to: WorkflowSnapshot }) {
-  const changes = diffSnapshots(from, to);
-  const fromOutline = describeSnapshot(from);
-  const toOutline = describeSnapshot(to);
+  const nameChanged = from.title !== to.title;
+  const fromTrigger = from.placedTrigger?.label ?? null;
+  const toTrigger = to.placedTrigger?.label ?? null;
+  const triggerChanged = fromTrigger !== toTrigger;
+
+  const taskEntries = buildDiffEntries(
+    collectByKind(from.placedNodes, "task"),
+    collectByKind(to.placedNodes, "task"),
+  );
+  const branchEntries = buildDiffEntries(
+    collectByKind(from.placedNodes, "branch"),
+    collectByKind(to.placedNodes, "branch"),
+  );
+
+  const allEntries = [...taskEntries, ...branchEntries];
+  const addedCount =
+    allEntries.filter((e) => e.status === "added").length +
+    (triggerChanged && !fromTrigger ? 1 : 0);
+  const removedCount =
+    allEntries.filter((e) => e.status === "removed").length +
+    (triggerChanged && !toTrigger ? 1 : 0);
+  const modifiedCount =
+    (nameChanged ? 1 : 0) + (triggerChanged && fromTrigger && toTrigger ? 1 : 0);
+  const totalChanges = addedCount + removedCount + modifiedCount;
+
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
-      <div className="rounded-md border border-[#e5e9f0] bg-[#f8fafc] p-3 dark:border-[#333a47] dark:bg-[#1a1d23]">
-        <h3 className="text-xs font-medium uppercase tracking-[0.4px] text-[#6b7280] dark:text-[#9ba2b0]">
-          Changes
-        </h3>
-        {changes.length === 0 ? (
-          <p className="mt-2 text-xs text-[#6b7280] dark:text-[#9ba2b0]">
-            Identical — no semantic differences detected.
-          </p>
-        ) : (
-          <ul className="mt-2 flex flex-col gap-1.5">
-            {changes.map((c, i) => (
-              <DiffLine key={i} change={c} />
-            ))}
-          </ul>
-        )}
-      </div>
+      <DiffSummaryBar
+        added={addedCount}
+        removed={removedCount}
+        modified={modifiedCount}
+        total={totalChanges}
+      />
 
-      <CompareOutline title="From" subtitle="The version you selected" outline={fromOutline} accent="from" />
-      <CompareOutline title="To" subtitle="Your current draft / live" outline={toOutline} accent="to" />
+      <DiffSection title="Agent name">
+        {nameChanged ? (
+          <ModifiedRow
+            before={from.title || "(untitled)"}
+            after={to.title || "(untitled)"}
+          />
+        ) : (
+          <UnchangedRow label={to.title || "(untitled)"} />
+        )}
+      </DiffSection>
+
+      <DiffSection title="Trigger">
+        {triggerChanged ? (
+          fromTrigger && toTrigger ? (
+            <ModifiedRow before={fromTrigger} after={toTrigger} />
+          ) : (
+            <>
+              {fromTrigger && <DiffChipRow status="removed" label={fromTrigger} />}
+              {toTrigger && <DiffChipRow status="added" label={toTrigger} />}
+              {!fromTrigger && !toTrigger && <UnchangedRow label="(none)" />}
+            </>
+          )
+        ) : (
+          <UnchangedRow label={toTrigger ?? "(none)"} />
+        )}
+      </DiffSection>
+
+      <DiffSection title="Tasks" emptyLabel="No tasks">
+        {taskEntries.length === 0 ? null : (
+          <div className="flex flex-col gap-1.5">
+            {taskEntries.map((e) => (
+              <DiffChipRow key={`task-${e.label}-${e.status}`} status={e.status} label={e.label} />
+            ))}
+          </div>
+        )}
+      </DiffSection>
+
+      <DiffSection title="Branches" emptyLabel="No branches">
+        {branchEntries.length === 0 ? null : (
+          <div className="flex flex-col gap-1.5">
+            {branchEntries.map((e) => (
+              <DiffChipRow key={`branch-${e.label}-${e.status}`} status={e.status} label={e.label} />
+            ))}
+          </div>
+        )}
+      </DiffSection>
     </div>
   );
 }
 
-function DiffLine({
-  change,
+function DiffSummaryBar({
+  added,
+  removed,
+  modified,
+  total,
 }: {
-  change: {
-    kind: "name" | "trigger" | "task-added" | "task-removed" | "branch-added" | "branch-removed";
-    label: string;
-    before?: string;
-    after?: string;
-  };
+  added: number;
+  removed: number;
+  modified: number;
+  total: number;
 }) {
-  const added = change.kind.endsWith("added");
-  const removed = change.kind.endsWith("removed");
-  const modified = change.kind === "name" || change.kind === "trigger";
-  let symbol = "~";
-  let symbolClass = "bg-[#fef3c7] text-[#92400e] dark:bg-[#2a2218] dark:text-[#fcd34d]";
-  if (added) {
-    symbol = "+";
-    symbolClass = "bg-[#dcfce7] text-[#047857] dark:bg-[#052e1c] dark:text-[#6ee7b7]";
-  } else if (removed) {
-    symbol = "−";
-    symbolClass = "bg-[#fee2e2] text-[#b91c1c] dark:bg-[#2a1818] dark:text-[#fca5a5]";
+  if (total === 0) {
+    return (
+      <div className="flex items-center gap-2 rounded-md border border-[#e5e9f0] bg-[#f8fafc] px-3 py-2 dark:border-[#333a47] dark:bg-[#1a1d23]">
+        <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-[#e5e9f0] text-[10px] font-semibold text-[#6b7280] dark:bg-[#262b35] dark:text-[#9ba2b0]">
+          =
+        </span>
+        <span className="text-xs text-[#6b7280] dark:text-[#9ba2b0]">
+          Identical — no differences detected.
+        </span>
+      </div>
+    );
   }
-  const heading =
-    change.kind === "name"
-      ? "Agent name renamed"
-      : change.kind === "trigger"
-        ? "Trigger changed"
-        : change.kind === "task-added"
-          ? "Task added"
-          : change.kind === "task-removed"
-            ? "Task removed"
-            : change.kind === "branch-added"
-              ? "Branch added"
-              : "Branch removed";
   return (
-    <li className="flex items-start gap-2 text-xs leading-5">
-      <span className={`mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-[10px] font-semibold ${symbolClass}`} aria-hidden>
-        {symbol}
+    <div className="flex flex-wrap items-center gap-2 rounded-md border border-[#e5e9f0] bg-[#f8fafc] px-3 py-2 dark:border-[#333a47] dark:bg-[#1a1d23]">
+      <span className="text-xs font-medium uppercase tracking-[0.4px] text-[#6b7280] dark:text-[#9ba2b0]">
+        Changes
       </span>
-      <div className="flex min-w-0 flex-col">
-        <span className="text-[#374151] dark:text-[#e4e4e4]">{heading}</span>
-        {modified ? (
-          <span className="text-[#6b7280] dark:text-[#9ba2b0]">
-            <span className="line-through">{change.before}</span> → {change.after}
+      <div className="ml-auto flex items-center gap-1.5">
+        {added > 0 && (
+          <span className="inline-flex items-center gap-1 rounded-md bg-[#dcfce7] px-2 py-0.5 text-[11px] font-semibold text-[#047857] dark:bg-[#052e1c] dark:text-[#6ee7b7]">
+            +{added} added
           </span>
-        ) : (
-          <span className="text-[#6b7280] dark:text-[#9ba2b0]">{change.label}</span>
+        )}
+        {removed > 0 && (
+          <span className="inline-flex items-center gap-1 rounded-md bg-[#fee2e2] px-2 py-0.5 text-[11px] font-semibold text-[#b91c1c] dark:bg-[#2a1818] dark:text-[#fca5a5]">
+            −{removed} removed
+          </span>
+        )}
+        {modified > 0 && (
+          <span className="inline-flex items-center gap-1 rounded-md bg-[#fef3c7] px-2 py-0.5 text-[11px] font-semibold text-[#92400e] dark:bg-[#2a2218] dark:text-[#fcd34d]">
+            ~{modified} modified
+          </span>
         )}
       </div>
-    </li>
+    </div>
   );
 }
 
-function describeSnapshot(s: WorkflowSnapshot) {
-  return {
-    agent: s.title || "(untitled)",
-    trigger: s.placedTrigger?.label ?? "—",
-    tasks: collectByKind(s.placedNodes, "task"),
-    branches: collectByKind(s.placedNodes, "branch"),
-  };
-}
-
-function CompareOutline({
+function DiffSection({
   title,
-  subtitle,
-  outline,
-  accent,
+  emptyLabel,
+  children,
 }: {
   title: string;
-  subtitle: string;
-  outline: { agent: string; trigger: string; tasks: string[]; branches: string[] };
-  accent: "from" | "to";
+  emptyLabel?: string;
+  children: React.ReactNode;
 }) {
-  const accentBg = accent === "from" ? "bg-[#f4f6f7] dark:bg-[#262b35]" : "bg-[#eff6ff] dark:bg-[#1e293b]";
   return (
-    <div className={`rounded-md border border-[#e5e9f0] p-3 dark:border-[#333a47] ${accentBg}`}>
-      <div className="flex items-baseline justify-between">
-        <h3 className="text-xs font-medium uppercase tracking-[0.4px] text-[#6b7280] dark:text-[#9ba2b0]">
-          {title}
-        </h3>
-        <span className="text-[10px] text-[#9ca3af] dark:text-[#9ba2b0]">{subtitle}</span>
-      </div>
-      <dl className="mt-2 flex flex-col gap-1 text-xs">
-        <div className="flex items-baseline gap-2">
-          <dt className="w-16 shrink-0 text-[#9ca3af] dark:text-[#9ba2b0]">Agent</dt>
-          <dd className="min-w-0 flex-1 truncate text-[#212121] dark:text-[#f3f4f6]">{outline.agent}</dd>
+    <section className="flex flex-col gap-1.5">
+      <h3 className="text-[10px] font-medium uppercase tracking-[0.5px] text-[#9ca3af] dark:text-[#9ba2b0]">
+        {title}
+      </h3>
+      {children ?? (
+        <div className="rounded-md border border-dashed border-[#e5e9f0] px-3 py-2 text-xs text-[#9ca3af] dark:border-[#333a47] dark:text-[#9ba2b0]">
+          {emptyLabel ?? "—"}
         </div>
-        <div className="flex items-baseline gap-2">
-          <dt className="w-16 shrink-0 text-[#9ca3af] dark:text-[#9ba2b0]">Trigger</dt>
-          <dd className="min-w-0 flex-1 truncate text-[#212121] dark:text-[#f3f4f6]">{outline.trigger}</dd>
-        </div>
-        <div className="flex items-baseline gap-2">
-          <dt className="w-16 shrink-0 text-[#9ca3af] dark:text-[#9ba2b0]">Tasks</dt>
-          <dd className="min-w-0 flex-1 text-[#212121] dark:text-[#f3f4f6]">
-            {outline.tasks.length === 0 ? "—" : outline.tasks.join(", ")}
-          </dd>
-        </div>
-        <div className="flex items-baseline gap-2">
-          <dt className="w-16 shrink-0 text-[#9ca3af] dark:text-[#9ba2b0]">Branches</dt>
-          <dd className="min-w-0 flex-1 text-[#212121] dark:text-[#f3f4f6]">
-            {outline.branches.length === 0 ? "—" : outline.branches.join(", ")}
-          </dd>
-        </div>
-      </dl>
+      )}
+    </section>
+  );
+}
+
+function DiffChipRow({
+  status,
+  label,
+}: {
+  status: "added" | "removed" | "unchanged";
+  label: string;
+}) {
+  const styles = {
+    added: {
+      container:
+        "border-[#86efac] bg-[#f0fdf4] dark:border-[#14532d]/60 dark:bg-[#052e1c]/40",
+      symbol: "bg-[#16a34a] text-white",
+      text: "text-[#047857] dark:text-[#86efac]",
+      symbolChar: "+",
+    },
+    removed: {
+      container:
+        "border-[#fca5a5] bg-[#fef2f2] dark:border-[#7f1d1d]/60 dark:bg-[#2a1818]/40",
+      symbol: "bg-[#dc2626] text-white",
+      text: "text-[#b91c1c] line-through dark:text-[#fca5a5]",
+      symbolChar: "−",
+    },
+    unchanged: {
+      container: "border-[#e5e9f0] bg-white dark:border-[#333a47] dark:bg-[#1e2229]",
+      symbol: "bg-[#e5e9f0] text-[#6b7280] dark:bg-[#262b35] dark:text-[#9ba2b0]",
+      text: "text-[#374151] dark:text-[#e4e4e4]",
+      symbolChar: "=",
+    },
+  }[status];
+  return (
+    <div
+      className={`flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs ${styles.container}`}
+    >
+      <span
+        className={`inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-[10px] font-bold ${styles.symbol}`}
+        aria-hidden
+      >
+        {styles.symbolChar}
+      </span>
+      <span className={`min-w-0 flex-1 truncate ${styles.text}`}>{label}</span>
     </div>
   );
+}
+
+function ModifiedRow({ before, after }: { before: string; after: string }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <DiffChipRow status="removed" label={before} />
+      <DiffChipRow status="added" label={after} />
+    </div>
+  );
+}
+
+function UnchangedRow({ label }: { label: string }) {
+  return <DiffChipRow status="unchanged" label={label} />;
 }
 
 function RestoreConfirmDialog({
