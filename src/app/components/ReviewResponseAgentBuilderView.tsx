@@ -1035,6 +1035,13 @@ export function ReviewResponseAgentBuilderView({ onBack }: Props) {
               viewOnly={viewOnly}
               viewingVersion={viewingVersion}
               onReturnToDraft={handleReturnToDraft}
+              compareSnapshot={
+                compareTarget !== null
+                  ? versions.find((v) => v.number === compareTarget)?.snapshot ?? null
+                  : null
+              }
+              compareVersionNumber={compareTarget}
+              onExitCompare={() => setCompareTarget(null)}
             />
           ) : (
           <div className="relative z-10 flex flex-1 flex-col items-center justify-center px-8 py-12 animate-in fade-in duration-300">
@@ -2356,6 +2363,11 @@ interface WorkflowCanvasProps {
   viewOnly: boolean;
   viewingVersion: number | null;
   onReturnToDraft: () => void;
+  /** When set, the canvas paints diff highlights vs this snapshot. */
+  compareSnapshot: WorkflowSnapshot | null;
+  /** Version number being compared against (for the compare banner). */
+  compareVersionNumber: number | null;
+  onExitCompare: () => void;
 }
 
 const CARD_WIDTH = "w-[360px]";
@@ -2399,9 +2411,44 @@ function WorkflowCanvas({
   viewingVersion,
   onReturnToDraft,
   agentName,
+  compareSnapshot,
+  compareVersionNumber,
+  onExitCompare,
 }: WorkflowCanvasProps) {
   const agentSelected = selection?.kind === "agent";
   const triggerSelected = selection?.kind === "trigger";
+
+  // ─── Compare-mode diff computation ────────────────────────────────────
+  const inCompare = compareSnapshot !== null;
+  const agentNameDiff: "modified" | null =
+    inCompare && (compareSnapshot!.title || "") !== (agentName || "") ? "modified" : null;
+  const fromTrig = compareSnapshot?.placedTrigger ?? null;
+  const toTrig = placedTrigger;
+  let triggerDiff: "added" | "removed" | "modified" | null = null;
+  if (inCompare) {
+    if (!fromTrig && toTrig) triggerDiff = "added";
+    else if (fromTrig && !toTrig) triggerDiff = "removed";
+    else if (fromTrig && toTrig && fromTrig.label !== toTrig.label) triggerDiff = "modified";
+  }
+
+  // Build a merged top-level node list including removed-from-compare ghosts.
+  // We match by `id`; new nodes get "added", missing ones get "removed".
+  type MergedNode = { node: WorkflowNode; status: "added" | "removed" | "unchanged" };
+  const mergedNodes: MergedNode[] = [];
+  if (inCompare) {
+    const fromIds = new Set(compareSnapshot!.placedNodes.map((n) => n.id));
+    const toIds = new Set(placedNodes.map((n) => n.id));
+    for (const node of placedNodes) {
+      mergedNodes.push({ node, status: fromIds.has(node.id) ? "unchanged" : "added" });
+    }
+    for (const node of compareSnapshot!.placedNodes) {
+      if (!toIds.has(node.id)) mergedNodes.push({ node, status: "removed" });
+    }
+  } else {
+    for (const node of placedNodes) mergedNodes.push({ node, status: "unchanged" });
+  }
+  const nodeStatusMap = new Map<string, "added" | "removed" | "unchanged">();
+  for (const m of mergedNodes) nodeStatusMap.set(m.node.id, m.status);
 
   // Tracks which kind of drag is currently happening over the canvas (so all
   // compatible slots can light up at once).
@@ -2861,13 +2908,15 @@ function WorkflowCanvas({
         </div>
       </div>
 
-      {viewOnly && (
+      {(viewOnly || inCompare) && (
         <div className="pointer-events-none absolute left-4 top-6 z-20 flex flex-col gap-2">
-          <span className="pointer-events-auto inline-flex h-8 items-center gap-1.5 rounded-full border border-[#e5e9f0] bg-white px-3 text-xs font-medium tracking-[-0.24px] text-[#6b7280] shadow-[0_1px_3px_rgba(15,23,42,0.06)] dark:border-[#333a47] dark:bg-[#1e2229] dark:text-[#9ba2b0]">
-            <Eye className="h-3.5 w-3.5" aria-hidden />
-            View only
-          </span>
-          {viewingVersion !== null && (
+          {!inCompare && (
+            <span className="pointer-events-auto inline-flex h-8 items-center gap-1.5 rounded-full border border-[#e5e9f0] bg-white px-3 text-xs font-medium tracking-[-0.24px] text-[#6b7280] shadow-[0_1px_3px_rgba(15,23,42,0.06)] dark:border-[#333a47] dark:bg-[#1e2229] dark:text-[#9ba2b0]">
+              <Eye className="h-3.5 w-3.5" aria-hidden />
+              View only
+            </span>
+          )}
+          {viewingVersion !== null && !inCompare && (
             <div className="pointer-events-auto inline-flex h-8 items-center gap-2 rounded-full border border-[#dbeafe] bg-[#eff6ff] px-3 text-xs font-medium tracking-[-0.24px] text-[#1d4ed8] shadow-[0_1px_3px_rgba(15,23,42,0.06)] dark:border-[#1e3a8a] dark:bg-[#1e293b] dark:text-[#93c5fd]">
               <Tag className="h-3 w-3" aria-hidden />
               Viewing v{viewingVersion}
@@ -2878,6 +2927,37 @@ function WorkflowCanvas({
               >
                 Return to draft
               </button>
+            </div>
+          )}
+          {inCompare && (
+            <div className="pointer-events-auto flex flex-col gap-2 rounded-md border border-[#e5e9f0] bg-white px-3 py-2 shadow-[0_2px_6px_rgba(15,23,42,0.08)] dark:border-[#333a47] dark:bg-[#1e2229]">
+              <div className="flex items-center gap-2">
+                <GitCompare className="h-3.5 w-3.5 text-[#6b7280] dark:text-[#9ba2b0]" aria-hidden />
+                <span className="text-xs font-medium tracking-[-0.24px] text-[#212121] dark:text-[#f3f4f6]">
+                  Comparing v{compareVersionNumber}
+                </span>
+                <button
+                  type="button"
+                  onClick={onExitCompare}
+                  className="ml-1 inline-flex h-5 items-center rounded-full bg-[#f4f6f7] px-2 text-[11px] font-medium text-[#374151] hover:bg-[#e5e9f0] dark:bg-[#262b35] dark:text-[#e4e4e4] dark:hover:bg-[#333a47]"
+                >
+                  Exit
+                </button>
+              </div>
+              <div className="flex items-center gap-2 text-[10px] text-[#6b7280] dark:text-[#9ba2b0]">
+                <span className="inline-flex items-center gap-1">
+                  <span className="inline-block h-2 w-2 rounded-full bg-[#16a34a]" aria-hidden />
+                  Added
+                </span>
+                <span className="inline-flex items-center gap-1">
+                  <span className="inline-block h-2 w-2 rounded-full bg-[#dc2626]" aria-hidden />
+                  Removed
+                </span>
+                <span className="inline-flex items-center gap-1">
+                  <span className="inline-block h-2 w-2 rounded-full bg-[#f59e0b]" aria-hidden />
+                  Modified
+                </span>
+              </div>
             </div>
           )}
         </div>
@@ -2903,6 +2983,7 @@ function WorkflowCanvas({
           selected={agentSelected}
           onClick={onSelectAgent}
           dataCardId="__agent"
+          diffStatus={agentNameDiff}
         >
           <div className="flex items-center gap-3">
             <Sparkles className="h-5 w-5 shrink-0 text-[#6834b7] dark:text-[#b39ae5]" />
@@ -2927,12 +3008,29 @@ function WorkflowCanvas({
               selected={triggerSelected}
               onClick={onTriggerSelect}
               dataCardId="__trigger"
+              diffStatus={triggerDiff}
             >
               <CardEyebrow icon={<Zap className="h-3.5 w-3.5 text-[#6834b7] dark:text-[#b39ae5]" />}>
                 Trigger
               </CardEyebrow>
               <CardTitle>1. {placedTrigger.label}</CardTitle>
               <CardDescription>{placedTrigger.description}</CardDescription>
+            </BuilderCard>
+          </>
+        ) : inCompare && fromTrig ? (
+          <>
+            <Connector />
+            <BuilderCard
+              width={CARD_WIDTH}
+              variant="raised"
+              dataCardId="__trigger-removed"
+              diffStatus="removed"
+            >
+              <CardEyebrow icon={<Zap className="h-3.5 w-3.5 text-[#6834b7] dark:text-[#b39ae5]" />}>
+                Trigger
+              </CardEyebrow>
+              <CardTitle>1. {fromTrig.label}</CardTitle>
+              <CardDescription>{fromTrig.description}</CardDescription>
             </BuilderCard>
           </>
         ) : (
@@ -2949,10 +3047,12 @@ function WorkflowCanvas({
         )}
 
         {/* Task slots + task / branch cards (only meaningful after a trigger is placed) */}
-        {placedTrigger && (
+        {(placedTrigger || (inCompare && fromTrig)) && (
           <>
             <NodeFlow
-              nodes={placedNodes}
+              nodes={inCompare ? mergedNodes.map((m) => m.node) : placedNodes}
+              nodeStatusMap={nodeStatusMap}
+              inCompare={inCompare}
               startIndexLabel={2}
               activeDrag={activeDrag}
               draggingTaskId={draggingTaskId}
@@ -2980,6 +3080,10 @@ function WorkflowCanvas({
 
 interface NodeFlowProps {
   nodes: WorkflowNode[];
+  /** Per-node diff status keyed by node id; absent → "unchanged". */
+  nodeStatusMap?: Map<string, "added" | "removed" | "unchanged">;
+  /** When true, drop slots and drag handles are suppressed. */
+  inCompare?: boolean;
   /** Number to start counting tasks from in card titles (top-level: 2, since trigger is 1). */
   startIndexLabel: number;
   activeDrag: DragKind;
@@ -3001,6 +3105,8 @@ interface NodeFlowProps {
 
 function NodeFlow({
   nodes,
+  nodeStatusMap,
+  inCompare,
   startIndexLabel,
   activeDrag,
   draggingTaskId,
@@ -3016,31 +3122,49 @@ function NodeFlow({
   laneId,
 }: NodeFlowProps) {
   const dropAt = (i: number) => (laneId ? laneDrop(laneId, i) : topLevelDrop(i));
+  const statusFor = (id: string): "added" | "removed" | "modified" | null => {
+    if (!inCompare) return null;
+    const s = nodeStatusMap?.get(id);
+    return s === "unchanged" || !s ? null : s;
+  };
 
   return (
     <>
-      {nodes.map((node, i) => (
-        <Fragment key={node.id}>
-          <Connector />
-          <DropSlot accept="task" activeDrag={activeDrag} onDrop={dropAt(i)} />
-          <Connector />
-          {node.kind === "task" ? (
-            <DragHandleWrapper
-              onDragStart={onTaskDragStart(node.id)}
-              onDragEnd={onTaskDragEnd}
-            >
+      {nodes.map((node, i) => {
+        const diff = statusFor(node.id);
+        const removed = diff === "removed";
+
+        let cardJsx: React.ReactNode;
+        if (node.kind === "task") {
+          if (removed) {
+            cardJsx = (
+              <BuilderCard
+                width={CARD_WIDTH}
+                variant="raised"
+                dataCardId={node.id}
+                diffStatus="removed"
+              >
+                <CardEyebrow
+                  icon={<TaskIcon className="h-3.5 w-3.5 text-[#1976d2] dark:text-[#5b9bf5]" />}
+                >
+                  Task
+                </CardEyebrow>
+                <CardTitle>
+                  {startIndexLabel + i}. {node.label}
+                </CardTitle>
+                <CardDescription>{node.description}</CardDescription>
+              </BuilderCard>
+            );
+          } else if (inCompare) {
+            cardJsx = (
               <BuilderCard
                 width={CARD_WIDTH}
                 variant="raised"
                 selected={selection?.kind === "task" && selection.taskId === node.id}
                 onClick={() => onTaskSelect(node.id)}
                 enterAnimation
-                isDragging={draggingTaskId === node.id}
-                draggable
-                onDragStart={onTaskDragStart(node.id)}
-                onDragEnd={onTaskDragEnd}
-                dataTaskId={node.id}
                 dataCardId={node.id}
+                diffStatus={diff}
               >
                 <CardEyebrow
                   icon={<TaskIcon className="h-3.5 w-3.5 text-[#1976d2] dark:text-[#5b9bf5]" />}
@@ -3062,8 +3186,52 @@ function NodeFlow({
                 </CardTitle>
                 <CardDescription>{node.description}</CardDescription>
               </BuilderCard>
-            </DragHandleWrapper>
-          ) : (
+            );
+          } else {
+            cardJsx = (
+              <DragHandleWrapper
+                onDragStart={onTaskDragStart(node.id)}
+                onDragEnd={onTaskDragEnd}
+              >
+                <BuilderCard
+                  width={CARD_WIDTH}
+                  variant="raised"
+                  selected={selection?.kind === "task" && selection.taskId === node.id}
+                  onClick={() => onTaskSelect(node.id)}
+                  enterAnimation
+                  isDragging={draggingTaskId === node.id}
+                  draggable
+                  onDragStart={onTaskDragStart(node.id)}
+                  onDragEnd={onTaskDragEnd}
+                  dataTaskId={node.id}
+                  dataCardId={node.id}
+                  diffStatus={diff}
+                >
+                  <CardEyebrow
+                    icon={<TaskIcon className="h-3.5 w-3.5 text-[#1976d2] dark:text-[#5b9bf5]" />}
+                    right={
+                      <div className="flex items-center gap-2">
+                        <Switch
+                          checked={node.enabled}
+                          onCheckedChange={(v) => onTaskEnabledChange(node.id, v)}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                        <MoreVertical className="h-4 w-4 text-[#9ca3af] dark:text-[#6b7280]" />
+                      </div>
+                    }
+                  >
+                    Task
+                  </CardEyebrow>
+                  <CardTitle>
+                    {startIndexLabel + i}. {node.label}
+                  </CardTitle>
+                  <CardDescription>{node.description}</CardDescription>
+                </BuilderCard>
+              </DragHandleWrapper>
+            );
+          }
+        } else {
+          cardJsx = (
             <BranchBlock
               branch={node}
               indexLabel={startIndexLabel + i}
@@ -3078,12 +3246,31 @@ function NodeFlow({
               onTaskDragEnd={onTaskDragEnd}
               topLevelDrop={topLevelDrop}
               laneDrop={laneDrop}
+              diffStatus={diff}
+              inCompare={inCompare}
             />
-          )}
-        </Fragment>
-      ))}
-      <Connector />
-      <DropSlot accept="task" activeDrag={activeDrag} onDrop={dropAt(nodes.length)} />
+          );
+        }
+
+        return (
+          <Fragment key={node.id}>
+            <Connector />
+            {!inCompare && (
+              <>
+                <DropSlot accept="task" activeDrag={activeDrag} onDrop={dropAt(i)} />
+                <Connector />
+              </>
+            )}
+            {cardJsx}
+          </Fragment>
+        );
+      })}
+      {!inCompare && (
+        <>
+          <Connector />
+          <DropSlot accept="task" activeDrag={activeDrag} onDrop={dropAt(nodes.length)} />
+        </>
+      )}
     </>
   );
 }
@@ -3102,6 +3289,8 @@ interface BranchBlockProps {
   onTaskDragEnd: () => void;
   topLevelDrop: (atIndex: number) => (e: ReactDragEvent<HTMLDivElement>) => void;
   laneDrop: (laneId: string, atIndex: number) => (e: ReactDragEvent<HTMLDivElement>) => void;
+  diffStatus?: "added" | "removed" | "modified" | null;
+  inCompare?: boolean;
 }
 
 function BranchBlock({
@@ -3118,17 +3307,21 @@ function BranchBlock({
   onTaskDragEnd,
   topLevelDrop,
   laneDrop,
+  diffStatus,
+  inCompare,
 }: BranchBlockProps) {
   const isSelected = selection?.kind === "branch" && selection.branchId === branch.id;
+  const removed = diffStatus === "removed";
   return (
     <div className="flex flex-col items-center">
       <BuilderCard
         width={CARD_WIDTH}
         variant="raised"
         selected={isSelected}
-        onClick={() => onBranchSelect(branch.id)}
+        onClick={removed ? undefined : () => onBranchSelect(branch.id)}
         enterAnimation
         dataCardId={branch.id}
+        diffStatus={diffStatus}
       >
         <CardEyebrow
           icon={<GitBranch className="h-3.5 w-3.5 text-[#1976d2] dark:text-[#5b9bf5]" />}
@@ -3176,6 +3369,7 @@ function BranchBlock({
                 topLevelDrop={topLevelDrop}
                 laneDrop={laneDrop}
                 laneId={lane.id}
+                inCompare={inCompare}
               />
             </div>
           ))}
@@ -3203,6 +3397,8 @@ interface BuilderCardProps {
   dataTaskId?: string;
   /** Stable id used by the auto-center logic to find a card by selection. */
   dataCardId?: string;
+  /** Diff overlay state when comparing versions. */
+  diffStatus?: "added" | "removed" | "modified" | null;
   children: React.ReactNode;
 }
 
@@ -3218,6 +3414,7 @@ function BuilderCard({
   isDragging,
   dataTaskId,
   dataCardId,
+  diffStatus,
   children,
 }: BuilderCardProps) {
   const radius = variant === "pill" ? "rounded-full" : "rounded-xl";
@@ -3226,34 +3423,81 @@ function BuilderCard({
       ? "shadow-[0_1px_2px_rgba(15,23,42,0.04)]"
       : "shadow-[0_2px_8px_rgba(15,23,42,0.08)]";
   const padding = variant === "pill" ? "px-5 py-3" : "p-4";
-  const ring = selected
+  let bg = "bg-white dark:bg-[#262b35]";
+  let ring = selected
     ? "ring-2 ring-[#1976d2] dark:ring-[#5b9bf5]"
     : "ring-1 ring-transparent hover:ring-1 hover:ring-[#c4d5e9] dark:hover:ring-[#3d4555]";
+  let extra = "";
+  if (diffStatus === "added") {
+    bg = "bg-[#f0fdf4] dark:bg-[#052e1c]/40";
+    ring = "ring-2 ring-[#16a34a] dark:ring-[#22c55e]";
+  } else if (diffStatus === "removed") {
+    bg = "bg-[#fef2f2] dark:bg-[#2a1818]/60";
+    ring = "ring-2 ring-[#dc2626] dark:ring-[#ef4444]";
+    extra = "opacity-70";
+  } else if (diffStatus === "modified") {
+    bg = "bg-[#fffbeb] dark:bg-[#2a2218]/60";
+    ring = "ring-2 ring-[#f59e0b] dark:ring-[#fbbf24]";
+  }
   const enter = enterAnimation
     ? "animate-in fade-in zoom-in-95 slide-in-from-top-1 duration-300"
     : "animate-in fade-in zoom-in-95 duration-300";
   const dragState = isDragging ? "scale-[0.97] opacity-60" : "";
   const cursor = draggable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer";
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={onClick}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onClick?.();
-        }
-      }}
-      draggable={draggable}
-      onDragStart={onDragStart}
-      onDragEnd={onDragEnd}
-      data-task-id={dataTaskId}
-      data-card-id={dataCardId}
-      className={`flex ${width} flex-col gap-2 ${radius} bg-white ${padding} text-left ${shadow} outline-none transition-[background-color,box-shadow,opacity,transform] duration-200 ease-out ${enter} ${ring} ${cursor} ${dragState} dark:bg-[#262b35]`}
-    >
-      {children}
+    <div className="relative">
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onClick}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onClick?.();
+          }
+        }}
+        draggable={draggable}
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+        data-task-id={dataTaskId}
+        data-card-id={dataCardId}
+        className={`flex ${width} flex-col gap-2 ${radius} ${bg} ${padding} text-left ${shadow} outline-none transition-[background-color,box-shadow,opacity,transform] duration-200 ease-out ${enter} ${ring} ${cursor} ${dragState} ${extra}`}
+      >
+        {children}
+      </div>
+      {diffStatus && (
+        <DiffBadge status={diffStatus} />
+      )}
     </div>
+  );
+}
+
+function DiffBadge({ status }: { status: "added" | "removed" | "modified" }) {
+  const map = {
+    added: {
+      label: "Added",
+      symbol: "+",
+      cls: "bg-[#16a34a] text-white",
+    },
+    removed: {
+      label: "Removed",
+      symbol: "−",
+      cls: "bg-[#dc2626] text-white",
+    },
+    modified: {
+      label: "Modified",
+      symbol: "~",
+      cls: "bg-[#f59e0b] text-white",
+    },
+  }[status];
+  return (
+    <span
+      className={`absolute -top-2 -right-2 z-10 inline-flex h-5 items-center gap-1 rounded-full px-2 text-[10px] font-semibold shadow-[0_1px_3px_rgba(15,23,42,0.15)] ${map.cls}`}
+      aria-label={map.label}
+    >
+      <span className="text-[12px] leading-none">{map.symbol}</span>
+      {map.label}
+    </span>
   );
 }
 
