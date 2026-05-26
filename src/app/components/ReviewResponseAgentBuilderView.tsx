@@ -42,6 +42,11 @@ import {
   Undo2,
   Redo2,
   Settings,
+  History,
+  Eye,
+  GitCompare,
+  RotateCcw,
+  Tag,
 } from "lucide-react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import {
@@ -98,6 +103,7 @@ import { useRequestChromeless } from "@/app/context/ChromeContext";
 import { ContextPickerDialog } from "@/app/components/ContextPickerDialog";
 import { BranchConfigPanel } from "@/app/components/BranchConfigPanel";
 import { PreviewSettingsDialog } from "@/app/components/PreviewSettingsDialog";
+import { toast } from "sonner";
 
 function TaskIcon({ className }: { className?: string }) {
   return (
@@ -257,6 +263,14 @@ interface PlacedBranch {
 
 type WorkflowNode = PlacedTask | PlacedBranch;
 
+type WorkflowSnapshot = {
+  title: string;
+  triggerName: string;
+  triggerDescription: string;
+  placedTrigger: PlacedTrigger | null;
+  placedNodes: WorkflowNode[];
+};
+
 type CanvasSelection =
   | { kind: "agent" }
   | { kind: "trigger" }
@@ -362,18 +376,134 @@ export function ReviewResponseAgentBuilderView({ onBack }: Props) {
   const [triggerDescription, setTriggerDescription] = useState("");
   const [placedNodes, setPlacedNodes] = useState<WorkflowNode[]>([]);
 
-  type WorkflowSnapshot = {
-    title: string;
-    triggerName: string;
-    triggerDescription: string;
-    placedTrigger: PlacedTrigger | null;
-    placedNodes: WorkflowNode[];
-  };
   const [history, setHistory] = useState<{ stack: WorkflowSnapshot[]; index: number }>(() => ({
     stack: [{ title, triggerName, triggerDescription, placedTrigger, placedNodes }],
     index: 0,
   }));
   const applyingHistoryRef = useRef(false);
+
+  type WorkflowVersion = {
+    number: number;
+    name?: string;
+    changeSummary: string;
+    publishedBy: string;
+    publishedAt: Date;
+    tags?: string[];
+    snapshot: WorkflowSnapshot;
+  };
+  const [versions, setVersions] = useState<WorkflowVersion[]>([]);
+  const [hasUnpublishedChanges, setHasUnpublishedChanges] = useState(false);
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+  const [autosaveState, setAutosaveState] = useState<"idle" | "saving" | "saved">("idle");
+  const [runState, setRunState] = useState<"idle" | "running">("idle");
+  const [versionSheetOpen, setVersionSheetOpen] = useState(false);
+  const [viewingVersion, setViewingVersion] = useState<number | null>(null);
+  const [stashedDraft, setStashedDraft] = useState<WorkflowSnapshot | null>(null);
+  const [compareTarget, setCompareTarget] = useState<number | null>(null);
+  const [restoreTarget, setRestoreTarget] = useState<number | null>(null);
+  const [, setNowTick] = useState(0);
+
+  const viewOnly = versionSheetOpen || viewingVersion !== null;
+
+  // Re-render every 5s so the "Saved Xs ago" indicator stays current.
+  useEffect(() => {
+    const id = window.setInterval(() => setNowTick((x) => x + 1), 5000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const currentVersion = versions[0]?.number ?? null;
+
+  const handlePublish = () => {
+    if (currentVersion !== null && !hasUnpublishedChanges) return;
+    const nextNumber = (versions[0]?.number ?? 0) + 1;
+    const isFirst = currentVersion === null;
+    const summary = isFirst ? "Initial published version" : "Updated workflow";
+    const snapshot: WorkflowSnapshot = {
+      title,
+      triggerName,
+      triggerDescription,
+      placedTrigger,
+      placedNodes,
+    };
+    setVersions((prev) => [
+      {
+        number: nextNumber,
+        changeSummary: summary,
+        publishedBy: "Raynil Kumar",
+        publishedAt: new Date(),
+        tags: isFirst ? ["Initial release"] : [],
+        snapshot,
+      },
+      ...prev,
+    ]);
+    setHasUnpublishedChanges(false);
+    toast.success(`Published v${nextNumber}`);
+  };
+
+  const applySnapshotReadOnly = (snap: WorkflowSnapshot) => {
+    applyingHistoryRef.current = true;
+    setTitle(snap.title);
+    setTriggerName(snap.triggerName);
+    setTriggerDescription(snap.triggerDescription);
+    setPlacedTrigger(snap.placedTrigger);
+    setPlacedNodes(snap.placedNodes);
+  };
+
+  const handleViewVersion = (n: number) => {
+    const v = versions.find((x) => x.number === n);
+    if (!v) return;
+    setCompareTarget(null);
+    if (viewingVersion === null) {
+      setStashedDraft({ title, triggerName, triggerDescription, placedTrigger, placedNodes });
+    }
+    applySnapshotReadOnly(v.snapshot);
+    setViewingVersion(n);
+  };
+
+  const handleReturnToDraft = () => {
+    if (stashedDraft) {
+      applySnapshotReadOnly(stashedDraft);
+    }
+    setStashedDraft(null);
+    setViewingVersion(null);
+  };
+
+  const handleRestoreConfirm = (n: number) => {
+    const v = versions.find((x) => x.number === n);
+    if (!v) return;
+    applySnapshotReadOnly(v.snapshot);
+    setHasUnpublishedChanges(true);
+    setLastSavedAt(new Date());
+    setAutosaveState("saved");
+    setStashedDraft(null);
+    setViewingVersion(null);
+    setVersionSheetOpen(false);
+    setRestoreTarget(null);
+    toast.success(`Restored v${n} as draft`, {
+      description: "Previous draft shelved for 7 days. Publish to promote.",
+    });
+  };
+
+  const handleCloseHistory = () => {
+    if (viewingVersion !== null && stashedDraft) {
+      applySnapshotReadOnly(stashedDraft);
+      setStashedDraft(null);
+      setViewingVersion(null);
+    }
+    setCompareTarget(null);
+    setVersionSheetOpen(false);
+  };
+
+  const formatRelativeTime = (from: Date | null) => {
+    if (!from) return "";
+    const diffSec = Math.max(0, Math.floor((Date.now() - from.getTime()) / 1000));
+    if (diffSec < 5) return "just now";
+    if (diffSec < 60) return `${diffSec}s ago`;
+    const min = Math.floor(diffSec / 60);
+    if (min < 60) return `${min}m ago`;
+    const hr = Math.floor(min / 60);
+    return `${hr}h ago`;
+  };
 
   useEffect(() => {
     if (applyingHistoryRef.current) {
@@ -381,7 +511,9 @@ export function ReviewResponseAgentBuilderView({ onBack }: Props) {
       return;
     }
     const next: WorkflowSnapshot = { title, triggerName, triggerDescription, placedTrigger, placedNodes };
+    setAutosaveState("saving");
     const timer = window.setTimeout(() => {
+      let changed = false;
       setHistory((h) => {
         const cur = h.stack[h.index];
         if (
@@ -393,13 +525,21 @@ export function ReviewResponseAgentBuilderView({ onBack }: Props) {
         ) {
           return h;
         }
+        changed = true;
         const trimmed = h.stack.slice(0, h.index + 1);
         trimmed.push(next);
         return { stack: trimmed, index: trimmed.length - 1 };
       });
+      if (changed) {
+        setLastSavedAt(new Date());
+        setAutosaveState("saved");
+        setHasUnpublishedChanges((prev) => prev || versions.length > 0);
+      } else {
+        setAutosaveState((s) => (s === "saving" ? "idle" : s));
+      }
     }, 350);
     return () => window.clearTimeout(timer);
-  }, [title, triggerName, triggerDescription, placedTrigger, placedNodes]);
+  }, [title, triggerName, triggerDescription, placedTrigger, placedNodes, versions.length]);
 
   const applySnapshot = (snap: WorkflowSnapshot) => {
     applyingHistoryRef.current = true;
@@ -685,26 +825,57 @@ export function ReviewResponseAgentBuilderView({ onBack }: Props) {
         >
           <ArrowLeft className="h-4 w-4" />
         </Button>
-        <input
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          className="flex-1 bg-transparent text-[18px] font-normal tracking-[-0.36px] text-[#212121] outline-none focus:outline-none dark:text-[#f3f4f6]"
-          aria-label="Agent name"
-        />
+        <label className="relative inline-grid min-w-0 max-w-[60%] items-center">
+          <span
+            aria-hidden
+            className="invisible col-start-1 row-start-1 whitespace-pre text-[18px] font-normal tracking-[-0.36px]"
+          >
+            {title || " "}
+          </span>
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            className="col-start-1 row-start-1 w-full min-w-0 bg-transparent text-[18px] font-normal tracking-[-0.36px] text-[#212121] outline-none focus:outline-none dark:text-[#f3f4f6]"
+            aria-label="Agent name"
+          />
+        </label>
+        {creating && currentVersion !== null && (
+          <RunStateChip
+            state={runState}
+            onClick={() => setRunState((s) => (s === "running" ? "idle" : "running"))}
+          />
+        )}
+        <div className="flex-1" />
+        {creating && (
+          <AutosaveIndicator
+            state={autosaveState}
+            lastSavedAt={lastSavedAt}
+            formatRelativeTime={formatRelativeTime}
+          />
+        )}
         <Button
           variant="ghost"
           size="icon"
           className="h-9 w-9 text-[#6b7280] dark:text-[#9ba2b0]"
           aria-label="Save"
+          disabled={viewOnly}
+          onClick={() => {
+            setLastSavedAt(new Date());
+            setAutosaveState("saved");
+          }}
         >
           <CloudUpload className="h-4 w-4" />
         </Button>
-        <Button size="sm" disabled className="h-9">
-          Publish
-        </Button>
+        <PublishButton
+          currentVersion={currentVersion}
+          hasUnpublishedChanges={hasUnpublishedChanges}
+          disabled={!creating || !placedTrigger || viewOnly}
+          onPublish={handlePublish}
+        />
       </div>
 
       <div className="flex min-h-0 flex-1 gap-6 overflow-hidden bg-[#f4f6f7] p-6 dark:bg-[#1a1d23]">
+        {!versionSheetOpen && (
         <aside className="flex w-[360px] shrink-0 flex-col gap-5 rounded-lg bg-white px-6 pt-2 pb-5 dark:bg-[#1e2229]">
           <div role="tablist" aria-label="Build mode" className="flex w-full">
             <button
@@ -809,6 +980,7 @@ export function ReviewResponseAgentBuilderView({ onBack }: Props) {
             />
           )}
         </aside>
+        )}
 
         <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-lg">
           <div
@@ -851,6 +1023,18 @@ export function ReviewResponseAgentBuilderView({ onBack }: Props) {
               canRedo={canRedo}
               onUndo={handleUndo}
               onRedo={handleRedo}
+              onOpenHistory={() => {
+                if (versionSheetOpen) {
+                  handleCloseHistory();
+                } else {
+                  setSelection(null);
+                  setVersionSheetOpen(true);
+                }
+              }}
+              versionCount={versions.length}
+              viewOnly={viewOnly}
+              viewingVersion={viewingVersion}
+              onReturnToDraft={handleReturnToDraft}
             />
           ) : (
           <div className="relative z-10 flex flex-1 flex-col items-center justify-center px-8 py-12 animate-in fade-in duration-300">
@@ -912,7 +1096,34 @@ export function ReviewResponseAgentBuilderView({ onBack }: Props) {
           )}
         </main>
 
-        {creating && selectedTask ? (
+        {versionSheetOpen && (
+          <VersionHistoryPanel
+            versions={versions}
+            currentVersion={currentVersion}
+            hasUnpublishedChanges={hasUnpublishedChanges}
+            viewingVersion={viewingVersion}
+            compareTarget={compareTarget}
+            liveSnapshot={{ title, triggerName, triggerDescription, placedTrigger, placedNodes }}
+            stashedDraft={stashedDraft}
+            onClose={handleCloseHistory}
+            onView={handleViewVersion}
+            onReturnToDraft={handleReturnToDraft}
+            onCompare={(n) => setCompareTarget(n)}
+            onExitCompare={() => setCompareTarget(null)}
+            onRestoreRequest={(n) => setRestoreTarget(n)}
+          />
+        )}
+        {restoreTarget !== null && (
+          <RestoreConfirmDialog
+            versionNumber={restoreTarget}
+            currentVersion={currentVersion}
+            hasUnpublishedChanges={hasUnpublishedChanges}
+            onCancel={() => setRestoreTarget(null)}
+            onConfirm={() => handleRestoreConfirm(restoreTarget)}
+          />
+        )}
+
+        {!versionSheetOpen && creating && selectedTask ? (
           <TaskConfigPanel
             key={`task-${selectedTask.id}`}
             taskKey={selectedTask.subId}
@@ -926,7 +1137,7 @@ export function ReviewResponseAgentBuilderView({ onBack }: Props) {
             onPromptChange={(prompt) => updateTask(selectedTask.id, { prompt })}
             onClose={() => setSelection(null)}
           />
-        ) : creating && selectedBranch ? (
+        ) : !versionSheetOpen && creating && selectedBranch ? (
           <BranchConfigPanel
             key={`branch-${selectedBranch.id}`}
             draft={{
@@ -966,7 +1177,7 @@ export function ReviewResponseAgentBuilderView({ onBack }: Props) {
             }}
             onClose={() => setSelection(null)}
           />
-        ) : creating && selection?.kind === "trigger" && placedTrigger ? (
+        ) : !versionSheetOpen && creating && selection?.kind === "trigger" && placedTrigger ? (
           <TriggerConfigPanel
             key={`trigger-${placedTrigger.subId}`}
             currentTypeId={placedTrigger.typeId}
@@ -978,7 +1189,7 @@ export function ReviewResponseAgentBuilderView({ onBack }: Props) {
             onDescriptionChange={setTriggerDescription}
             onClose={() => setSelection(null)}
           />
-        ) : creating && selection?.kind === "agent" ? (
+        ) : !versionSheetOpen && creating && selection?.kind === "agent" ? (
           <AgentDetailsPanel
             key="agent"
             name={title}
@@ -993,6 +1204,615 @@ export function ReviewResponseAgentBuilderView({ onBack }: Props) {
         ) : null}
       </div>
     </div>
+  );
+}
+
+function RunStateChip({
+  state,
+  onClick,
+}: {
+  state: "idle" | "running";
+  onClick: () => void;
+}) {
+  const running = state === "running";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={running ? "Click to stop" : "Click to simulate run"}
+      className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium tracking-[-0.24px] transition-colors ${
+        running
+          ? "border-[#bbf7d0] bg-[#ecfdf5] text-[#047857] hover:bg-[#d1fae5] dark:border-[#14532d] dark:bg-[#052e1c] dark:text-[#6ee7b7]"
+          : "border-[#e5e9f0] bg-white text-[#6b7280] hover:bg-[#f4f6f7] dark:border-[#333a47] dark:bg-[#262b35] dark:text-[#9ba2b0]"
+      }`}
+    >
+      <span
+        className={`relative flex h-2 w-2 ${running ? "" : ""}`}
+        aria-hidden
+      >
+        {running && (
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#10b981] opacity-75" />
+        )}
+        <span
+          className={`relative inline-flex h-2 w-2 rounded-full ${
+            running ? "bg-[#10b981]" : "bg-[#9ca3af]"
+          }`}
+        />
+      </span>
+      {running ? "Running" : "Idle"}
+    </button>
+  );
+}
+
+function AutosaveIndicator({
+  state,
+  lastSavedAt,
+  formatRelativeTime,
+}: {
+  state: "idle" | "saving" | "saved";
+  lastSavedAt: Date | null;
+  formatRelativeTime: (from: Date | null) => string;
+}) {
+  let label = "";
+  if (state === "saving") label = "Saving…";
+  else if (state === "saved" && lastSavedAt) label = `Saved ${formatRelativeTime(lastSavedAt)}`;
+  else if (lastSavedAt) label = `Saved ${formatRelativeTime(lastSavedAt)}`;
+  if (!label) return null;
+  return (
+    <span className="hidden shrink-0 items-center gap-1.5 text-xs text-[#6b7280] tracking-[-0.24px] sm:inline-flex dark:text-[#9ba2b0]">
+      {state === "saving" ? (
+        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#3b82f6]" aria-hidden />
+      ) : (
+        <Check className="h-3 w-3" aria-hidden />
+      )}
+      {label}
+    </span>
+  );
+}
+
+function PublishButton({
+  currentVersion,
+  hasUnpublishedChanges,
+  disabled,
+  onPublish,
+}: {
+  currentVersion: number | null;
+  hasUnpublishedChanges: boolean;
+  disabled: boolean;
+  onPublish: () => void;
+}) {
+  const isFirstPublish = currentVersion === null;
+  const showDot = !isFirstPublish && hasUnpublishedChanges;
+  const label = isFirstPublish
+    ? "Publish"
+    : hasUnpublishedChanges
+      ? `Publish v${currentVersion + 1}`
+      : `Published · v${currentVersion}`;
+  const variantClass =
+    !isFirstPublish && !hasUnpublishedChanges
+      ? "border-[#e5e9f0] bg-white text-[#6b7280] hover:bg-[#f4f6f7] dark:border-[#333a47] dark:bg-[#262b35] dark:text-[#9ba2b0]"
+      : "";
+  return (
+    <Button
+      size="sm"
+      variant={!isFirstPublish && !hasUnpublishedChanges ? "outline" : "default"}
+      disabled={disabled || (!isFirstPublish && !hasUnpublishedChanges)}
+      className={`h-9 gap-1.5 ${variantClass}`}
+      onClick={onPublish}
+    >
+      {showDot && (
+        <span className="h-1.5 w-1.5 rounded-full bg-[#f59e0b]" aria-hidden />
+      )}
+      {label}
+    </Button>
+  );
+}
+
+type PanelVersion = {
+  number: number;
+  name?: string;
+  changeSummary: string;
+  publishedBy: string;
+  publishedAt: Date;
+  tags?: string[];
+  snapshot: WorkflowSnapshot;
+};
+
+function VersionHistoryPanel({
+  versions,
+  currentVersion,
+  hasUnpublishedChanges,
+  viewingVersion,
+  compareTarget,
+  liveSnapshot,
+  stashedDraft,
+  onClose,
+  onView,
+  onReturnToDraft,
+  onCompare,
+  onExitCompare,
+  onRestoreRequest,
+}: {
+  versions: PanelVersion[];
+  currentVersion: number | null;
+  hasUnpublishedChanges: boolean;
+  viewingVersion: number | null;
+  compareTarget: number | null;
+  liveSnapshot: WorkflowSnapshot;
+  stashedDraft: WorkflowSnapshot | null;
+  onClose: () => void;
+  onView: (n: number) => void;
+  onReturnToDraft: () => void;
+  onCompare: (n: number) => void;
+  onExitCompare: () => void;
+  onRestoreRequest: (n: number) => void;
+}) {
+  const compareVersion = compareTarget !== null ? versions.find((x) => x.number === compareTarget) : null;
+  // The "live" half of the compare is what the user is actually working on right now.
+  // When viewing v2, that means stashedDraft (the unmodified draft); otherwise it's liveSnapshot.
+  const liveSide = stashedDraft ?? liveSnapshot;
+  const formatStamp = (d: Date) => {
+    const today = new Date();
+    const same =
+      d.getFullYear() === today.getFullYear() &&
+      d.getMonth() === today.getMonth() &&
+      d.getDate() === today.getDate();
+    const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    if (same) return `Today, ${time}`;
+    return `${d.toLocaleDateString([], { month: "short", day: "numeric" })}, ${time}`;
+  };
+  if (compareVersion) {
+    return (
+      <aside className="flex w-[400px] shrink-0 flex-col overflow-hidden rounded-lg bg-white animate-in slide-in-from-right-4 fade-in duration-300 ease-out dark:bg-[#1e2229]">
+        <header className="flex items-start justify-between gap-2 border-b border-[#e5e9f0] px-5 pt-4 pb-3 dark:border-[#252b35]">
+          <div className="flex min-w-0 flex-col gap-1">
+            <button
+              type="button"
+              onClick={onExitCompare}
+              className="-ml-1 inline-flex h-6 w-fit items-center gap-1 rounded px-1 text-xs font-medium text-[#1976d2] hover:bg-[#eff6ff] dark:text-[#93c5fd] dark:hover:bg-[#1e2229]"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" aria-hidden />
+              Back to versions
+            </button>
+            <div className="flex items-center gap-2">
+              <GitCompare className="h-4 w-4 text-[#6b7280] dark:text-[#9ba2b0]" aria-hidden />
+              <h2 className="text-[15px] font-medium tracking-[-0.3px] text-[#212121] dark:text-[#f3f4f6]">
+                Comparing v{compareVersion.number}
+              </h2>
+            </div>
+            <p className="text-xs leading-4 text-[#6b7280] dark:text-[#9ba2b0]">
+              Against your {stashedDraft ? "current draft" : currentVersion !== null && hasUnpublishedChanges ? "current draft" : currentVersion !== null ? `live v${currentVersion}` : "current draft"}.
+            </p>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 -mr-1 text-[#6b7280] dark:text-[#9ba2b0]"
+            onClick={onClose}
+            aria-label="Close version history"
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </header>
+        <CompareBody from={compareVersion.snapshot} to={liveSide} />
+      </aside>
+    );
+  }
+
+  return (
+    <aside className="flex w-[400px] shrink-0 flex-col overflow-hidden rounded-lg bg-white animate-in slide-in-from-right-4 fade-in duration-300 ease-out dark:bg-[#1e2229]">
+      <header className="flex items-start justify-between gap-2 border-b border-[#e5e9f0] px-5 pt-4 pb-3 dark:border-[#252b35]">
+        <div className="flex min-w-0 flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <History className="h-4 w-4 text-[#6b7280] dark:text-[#9ba2b0]" aria-hidden />
+            <h2 className="text-[15px] font-medium tracking-[-0.3px] text-[#212121] dark:text-[#f3f4f6]">
+              Version history
+            </h2>
+            {currentVersion !== null && (
+              <span className="inline-flex h-5 items-center rounded-full bg-[#f4f6f7] px-2 text-[11px] font-medium text-[#6b7280] dark:bg-[#262b35] dark:text-[#9ba2b0]">
+                v{currentVersion} live
+              </span>
+            )}
+          </div>
+          <p className="text-xs leading-4 text-[#6b7280] dark:text-[#9ba2b0]">
+            Every Publish creates an immutable version. Restore loads it into the draft without overwriting live.
+          </p>
+        </div>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 -mr-1 text-[#6b7280] dark:text-[#9ba2b0]"
+          onClick={onClose}
+          aria-label="Close version history"
+        >
+          <X className="h-4 w-4" />
+        </Button>
+      </header>
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
+        {viewingVersion !== null && (
+          <div className="rounded-md border border-[#dbeafe] bg-[#eff6ff] p-3 dark:border-[#1e3a8a] dark:bg-[#1e293b]">
+            <div className="flex items-start gap-2">
+              <Eye className="mt-0.5 h-4 w-4 shrink-0 text-[#1d4ed8] dark:text-[#93c5fd]" aria-hidden />
+              <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                <span className="text-sm font-medium tracking-[-0.28px] text-[#1e3a8a] dark:text-[#bfdbfe]">
+                  Viewing v{viewingVersion} (read-only)
+                </span>
+                <span className="text-xs text-[#1d4ed8] dark:text-[#93c5fd]">
+                  The canvas reflects this version's snapshot. Your draft is safe.
+                </span>
+                <button
+                  type="button"
+                  onClick={onReturnToDraft}
+                  className="mt-1 inline-flex h-7 w-fit items-center gap-1 rounded bg-white px-2 text-xs font-medium text-[#1d4ed8] hover:bg-[#dbeafe] dark:bg-[#1e2229] dark:text-[#93c5fd] dark:hover:bg-[#1e3a8a]"
+                >
+                  <ArrowLeft className="h-3.5 w-3.5" aria-hidden />
+                  Return to draft
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {hasUnpublishedChanges && currentVersion !== null && (
+          <div className="rounded-md border border-dashed border-[#f59e0b]/40 bg-[#fffbeb] p-3 dark:border-[#f59e0b]/30 dark:bg-[#2a2218]">
+            <div className="flex items-start gap-2">
+              <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#f59e0b]" aria-hidden />
+              <div className="flex min-w-0 flex-col">
+                <span className="text-sm font-medium tracking-[-0.28px] text-[#92400e] dark:text-[#fcd34d]">
+                  Unpublished draft changes
+                </span>
+                <span className="text-xs text-[#a16207] dark:text-[#fde68a]/80">
+                  Live traffic is still served by v{currentVersion}. Publish to promote.
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+        {versions.length === 0 ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-12 text-center">
+            <History className="h-6 w-6 text-[#9ca3af]" aria-hidden />
+            <span className="text-sm font-medium tracking-[-0.28px] text-[#212121] dark:text-[#f3f4f6]">
+              No versions yet
+            </span>
+            <span className="max-w-[260px] text-xs text-[#6b7280] dark:text-[#9ba2b0]">
+              Publish this workflow to create v1. Every Publish after that becomes a restorable version.
+            </span>
+          </div>
+        ) : (
+          <ol className="flex flex-col gap-2">
+            {versions.map((v, idx) => {
+              const isLive = idx === 0;
+              const restoreDisabled = isLive && !hasUnpublishedChanges && viewingVersion === null;
+              const isViewing = viewingVersion === v.number;
+              const title = v.name ?? v.changeSummary;
+              const showSecondaryLine = !!v.name && v.changeSummary && v.name !== v.changeSummary;
+              return (
+                <li
+                  key={v.number}
+                  className={`group rounded-md border bg-white p-3 transition-colors dark:bg-[#262b35] ${
+                    isViewing
+                      ? "border-[#1976d2] ring-2 ring-[#1976d2]/15 dark:border-[#5580e0]"
+                      : "border-[#e5e9f0] hover:border-[#c4d5e9] dark:border-[#333a47] dark:hover:border-[#5580e0]"
+                  }`}
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-7 shrink-0 items-center justify-center rounded bg-[#f4f6f7] px-2 text-xs font-medium tracking-[-0.24px] text-[#212121] dark:bg-[#1e2229] dark:text-[#f3f4f6]">
+                      v{v.number}
+                    </div>
+                    <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                        <span className="truncate text-sm font-medium tracking-[-0.28px] text-[#212121] dark:text-[#f3f4f6]">
+                          {title}
+                        </span>
+                        {isLive && (
+                          <span className="inline-flex h-5 items-center gap-1 rounded-full border border-[#bbf7d0] bg-[#ecfdf5] px-1.5 text-[10px] font-medium uppercase tracking-[0.4px] text-[#047857] dark:border-[#14532d] dark:bg-[#052e1c] dark:text-[#6ee7b7]">
+                            <span className="h-1.5 w-1.5 rounded-full bg-[#10b981]" aria-hidden />
+                            Live
+                          </span>
+                        )}
+                        {isViewing && (
+                          <span className="inline-flex h-5 items-center gap-1 rounded-full border border-[#dbeafe] bg-[#eff6ff] px-1.5 text-[10px] font-medium uppercase tracking-[0.4px] text-[#1d4ed8] dark:border-[#1e3a8a] dark:bg-[#1e293b] dark:text-[#93c5fd]">
+                            <Eye className="h-2.5 w-2.5" aria-hidden />
+                            Viewing
+                          </span>
+                        )}
+                        {v.tags?.map((tag) => (
+                          <span
+                            key={tag}
+                            className="inline-flex h-5 items-center gap-1 rounded-full border border-[#dbeafe] bg-[#eff6ff] px-1.5 text-[10px] font-medium tracking-[0.2px] text-[#1d4ed8] dark:border-[#1e3a8a] dark:bg-[#1e293b] dark:text-[#93c5fd]"
+                          >
+                            <Tag className="h-2.5 w-2.5" aria-hidden />
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                      {showSecondaryLine && (
+                        <span className="text-xs leading-4 text-[#4b5563] dark:text-[#cbd5e1]">
+                          {v.changeSummary}
+                        </span>
+                      )}
+                      <span className="text-xs text-[#6b7280] dark:text-[#9ba2b0]">
+                        {v.publishedBy} · {formatStamp(v.publishedAt)}
+                      </span>
+                      <div className="mt-1 flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => onView(v.number)}
+                          className={`inline-flex h-7 items-center gap-1 rounded border border-transparent px-2 text-xs font-medium transition-colors ${
+                            isViewing
+                              ? "bg-[#eff6ff] text-[#1d4ed8] dark:bg-[#1e3a8a] dark:text-[#93c5fd]"
+                              : "text-[#374151] hover:bg-[#f4f6f7] dark:text-[#e4e4e4] dark:hover:bg-[#1e2229]"
+                          }`}
+                        >
+                          <Eye className="h-3.5 w-3.5" aria-hidden />
+                          {isViewing ? "Viewing" : "View"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onCompare(v.number)}
+                          className="inline-flex h-7 items-center gap-1 rounded border border-transparent px-2 text-xs font-medium text-[#374151] transition-colors hover:bg-[#f4f6f7] dark:text-[#e4e4e4] dark:hover:bg-[#1e2229]"
+                        >
+                          <GitCompare className="h-3.5 w-3.5" aria-hidden />
+                          Compare
+                        </button>
+                        <button
+                          type="button"
+                          disabled={restoreDisabled}
+                          onClick={() => onRestoreRequest(v.number)}
+                          className="inline-flex h-7 items-center gap-1 rounded border border-transparent px-2 text-xs font-medium text-[#374151] transition-colors hover:bg-[#f4f6f7] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent dark:text-[#e4e4e4] dark:hover:bg-[#1e2229]"
+                          title={
+                            restoreDisabled
+                              ? "Already live — make an edit first"
+                              : "Load this version into the draft layer"
+                          }
+                        >
+                          <RotateCcw className="h-3.5 w-3.5" aria-hidden />
+                          Restore as draft
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        )}
+      </div>
+    </aside>
+  );
+}
+
+function collectByKind(nodes: WorkflowNode[], kind: "task" | "branch"): string[] {
+  const out: string[] = [];
+  const walk = (list: WorkflowNode[]) => {
+    for (const n of list) {
+      if (n.kind === kind) out.push(n.label);
+      if (n.kind === "branch") {
+        for (const lane of n.lanes) walk(lane.nodes);
+      }
+    }
+  };
+  walk(nodes);
+  return out;
+}
+
+function diffSnapshots(from: WorkflowSnapshot, to: WorkflowSnapshot) {
+  const changes: Array<{
+    kind: "name" | "trigger" | "task-added" | "task-removed" | "branch-added" | "branch-removed";
+    label: string;
+    before?: string;
+    after?: string;
+  }> = [];
+
+  if (from.title !== to.title) {
+    changes.push({ kind: "name", label: "Agent name", before: from.title, after: to.title });
+  }
+  const fromTrigger = from.placedTrigger?.label ?? "(none)";
+  const toTrigger = to.placedTrigger?.label ?? "(none)";
+  if (fromTrigger !== toTrigger) {
+    changes.push({ kind: "trigger", label: "Trigger", before: fromTrigger, after: toTrigger });
+  }
+
+  const fromTasks = collectByKind(from.placedNodes, "task");
+  const toTasks = collectByKind(to.placedNodes, "task");
+  const fromTaskSet = new Set(fromTasks);
+  const toTaskSet = new Set(toTasks);
+  for (const t of toTasks) if (!fromTaskSet.has(t)) changes.push({ kind: "task-added", label: t });
+  for (const t of fromTasks) if (!toTaskSet.has(t)) changes.push({ kind: "task-removed", label: t });
+
+  const fromBranches = collectByKind(from.placedNodes, "branch");
+  const toBranches = collectByKind(to.placedNodes, "branch");
+  const fromBranchSet = new Set(fromBranches);
+  const toBranchSet = new Set(toBranches);
+  for (const b of toBranches) if (!fromBranchSet.has(b)) changes.push({ kind: "branch-added", label: b });
+  for (const b of fromBranches) if (!toBranchSet.has(b)) changes.push({ kind: "branch-removed", label: b });
+
+  return changes;
+}
+
+function CompareBody({ from, to }: { from: WorkflowSnapshot; to: WorkflowSnapshot }) {
+  const changes = diffSnapshots(from, to);
+  const fromOutline = describeSnapshot(from);
+  const toOutline = describeSnapshot(to);
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
+      <div className="rounded-md border border-[#e5e9f0] bg-[#f8fafc] p-3 dark:border-[#333a47] dark:bg-[#1a1d23]">
+        <h3 className="text-xs font-medium uppercase tracking-[0.4px] text-[#6b7280] dark:text-[#9ba2b0]">
+          Changes
+        </h3>
+        {changes.length === 0 ? (
+          <p className="mt-2 text-xs text-[#6b7280] dark:text-[#9ba2b0]">
+            Identical — no semantic differences detected.
+          </p>
+        ) : (
+          <ul className="mt-2 flex flex-col gap-1.5">
+            {changes.map((c, i) => (
+              <DiffLine key={i} change={c} />
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <CompareOutline title="From" subtitle="The version you selected" outline={fromOutline} accent="from" />
+      <CompareOutline title="To" subtitle="Your current draft / live" outline={toOutline} accent="to" />
+    </div>
+  );
+}
+
+function DiffLine({
+  change,
+}: {
+  change: {
+    kind: "name" | "trigger" | "task-added" | "task-removed" | "branch-added" | "branch-removed";
+    label: string;
+    before?: string;
+    after?: string;
+  };
+}) {
+  const added = change.kind.endsWith("added");
+  const removed = change.kind.endsWith("removed");
+  const modified = change.kind === "name" || change.kind === "trigger";
+  let symbol = "~";
+  let symbolClass = "bg-[#fef3c7] text-[#92400e] dark:bg-[#2a2218] dark:text-[#fcd34d]";
+  if (added) {
+    symbol = "+";
+    symbolClass = "bg-[#dcfce7] text-[#047857] dark:bg-[#052e1c] dark:text-[#6ee7b7]";
+  } else if (removed) {
+    symbol = "−";
+    symbolClass = "bg-[#fee2e2] text-[#b91c1c] dark:bg-[#2a1818] dark:text-[#fca5a5]";
+  }
+  const heading =
+    change.kind === "name"
+      ? "Agent name renamed"
+      : change.kind === "trigger"
+        ? "Trigger changed"
+        : change.kind === "task-added"
+          ? "Task added"
+          : change.kind === "task-removed"
+            ? "Task removed"
+            : change.kind === "branch-added"
+              ? "Branch added"
+              : "Branch removed";
+  return (
+    <li className="flex items-start gap-2 text-xs leading-5">
+      <span className={`mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-[10px] font-semibold ${symbolClass}`} aria-hidden>
+        {symbol}
+      </span>
+      <div className="flex min-w-0 flex-col">
+        <span className="text-[#374151] dark:text-[#e4e4e4]">{heading}</span>
+        {modified ? (
+          <span className="text-[#6b7280] dark:text-[#9ba2b0]">
+            <span className="line-through">{change.before}</span> → {change.after}
+          </span>
+        ) : (
+          <span className="text-[#6b7280] dark:text-[#9ba2b0]">{change.label}</span>
+        )}
+      </div>
+    </li>
+  );
+}
+
+function describeSnapshot(s: WorkflowSnapshot) {
+  return {
+    agent: s.title || "(untitled)",
+    trigger: s.placedTrigger?.label ?? "—",
+    tasks: collectByKind(s.placedNodes, "task"),
+    branches: collectByKind(s.placedNodes, "branch"),
+  };
+}
+
+function CompareOutline({
+  title,
+  subtitle,
+  outline,
+  accent,
+}: {
+  title: string;
+  subtitle: string;
+  outline: { agent: string; trigger: string; tasks: string[]; branches: string[] };
+  accent: "from" | "to";
+}) {
+  const accentBg = accent === "from" ? "bg-[#f4f6f7] dark:bg-[#262b35]" : "bg-[#eff6ff] dark:bg-[#1e293b]";
+  return (
+    <div className={`rounded-md border border-[#e5e9f0] p-3 dark:border-[#333a47] ${accentBg}`}>
+      <div className="flex items-baseline justify-between">
+        <h3 className="text-xs font-medium uppercase tracking-[0.4px] text-[#6b7280] dark:text-[#9ba2b0]">
+          {title}
+        </h3>
+        <span className="text-[10px] text-[#9ca3af] dark:text-[#9ba2b0]">{subtitle}</span>
+      </div>
+      <dl className="mt-2 flex flex-col gap-1 text-xs">
+        <div className="flex items-baseline gap-2">
+          <dt className="w-16 shrink-0 text-[#9ca3af] dark:text-[#9ba2b0]">Agent</dt>
+          <dd className="min-w-0 flex-1 truncate text-[#212121] dark:text-[#f3f4f6]">{outline.agent}</dd>
+        </div>
+        <div className="flex items-baseline gap-2">
+          <dt className="w-16 shrink-0 text-[#9ca3af] dark:text-[#9ba2b0]">Trigger</dt>
+          <dd className="min-w-0 flex-1 truncate text-[#212121] dark:text-[#f3f4f6]">{outline.trigger}</dd>
+        </div>
+        <div className="flex items-baseline gap-2">
+          <dt className="w-16 shrink-0 text-[#9ca3af] dark:text-[#9ba2b0]">Tasks</dt>
+          <dd className="min-w-0 flex-1 text-[#212121] dark:text-[#f3f4f6]">
+            {outline.tasks.length === 0 ? "—" : outline.tasks.join(", ")}
+          </dd>
+        </div>
+        <div className="flex items-baseline gap-2">
+          <dt className="w-16 shrink-0 text-[#9ca3af] dark:text-[#9ba2b0]">Branches</dt>
+          <dd className="min-w-0 flex-1 text-[#212121] dark:text-[#f3f4f6]">
+            {outline.branches.length === 0 ? "—" : outline.branches.join(", ")}
+          </dd>
+        </div>
+      </dl>
+    </div>
+  );
+}
+
+function RestoreConfirmDialog({
+  versionNumber,
+  currentVersion,
+  hasUnpublishedChanges,
+  onCancel,
+  onConfirm,
+}: {
+  versionNumber: number;
+  currentVersion: number | null;
+  hasUnpublishedChanges: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <Dialog open onOpenChange={(open) => !open && onCancel()}>
+      <DialogPortal>
+        <DialogOverlay />
+        <DialogPrimitive.Content className="fixed left-[50%] top-[50%] z-50 grid w-full max-w-md translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border border-[#e5e9f0] bg-white p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 dark:border-[#333a47] dark:bg-[#1e2229]">
+          <DialogPrimitive.Title className="text-base font-medium tracking-[-0.32px] text-[#212121] dark:text-[#f3f4f6]">
+            Restore v{versionNumber} as draft?
+          </DialogPrimitive.Title>
+          <DialogPrimitive.Description asChild>
+            <div className="flex flex-col gap-2 text-sm leading-5 text-[#374151] dark:text-[#cbd5e1]">
+              <p>
+                This will load v{versionNumber}'s snapshot into your draft layer. Live traffic
+                {currentVersion !== null ? ` continues serving v${currentVersion}` : " is unaffected"} —
+                nothing changes until you Publish.
+              </p>
+              {hasUnpublishedChanges && (
+                <p className="rounded-md border border-dashed border-[#f59e0b]/40 bg-[#fffbeb] p-2 text-xs text-[#92400e] dark:border-[#f59e0b]/30 dark:bg-[#2a2218] dark:text-[#fcd34d]">
+                  Your current draft changes will be shelved (recoverable for 7 days).
+                </p>
+              )}
+            </div>
+          </DialogPrimitive.Description>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" size="sm" onClick={onCancel}>
+              Cancel
+            </Button>
+            <Button size="sm" onClick={onConfirm}>
+              <RotateCcw className="h-3.5 w-3.5" />
+              Restore as draft
+            </Button>
+          </div>
+        </DialogPrimitive.Content>
+      </DialogPortal>
+    </Dialog>
   );
 }
 
@@ -1468,6 +2288,11 @@ interface WorkflowCanvasProps {
   canRedo: boolean;
   onUndo: () => void;
   onRedo: () => void;
+  onOpenHistory: () => void;
+  versionCount: number;
+  viewOnly: boolean;
+  viewingVersion: number | null;
+  onReturnToDraft: () => void;
 }
 
 const CARD_WIDTH = "w-[360px]";
@@ -1505,6 +2330,11 @@ function WorkflowCanvas({
   canRedo,
   onUndo,
   onRedo,
+  onOpenHistory,
+  versionCount,
+  viewOnly,
+  viewingVersion,
+  onReturnToDraft,
   agentName,
 }: WorkflowCanvasProps) {
   const agentSelected = selection?.kind === "agent";
@@ -1935,18 +2765,60 @@ function WorkflowCanvas({
           <CanvasToolButton
             aria-label="Redo"
             title="Redo"
-            disabled={!canRedo}
+            disabled={!canRedo || viewOnly}
             onClick={onRedo}
-            className={!canRedo ? "opacity-40 hover:bg-transparent hover:text-[#6b7280] dark:hover:bg-transparent dark:hover:text-[#9ba2b0]" : undefined}
+            className={!canRedo || viewOnly ? "opacity-40 hover:bg-transparent hover:text-[#6b7280] dark:hover:bg-transparent dark:hover:text-[#9ba2b0]" : undefined}
           >
             <Redo2 className="h-4 w-4" />
           </CanvasToolButton>
+          <CanvasToolButton
+            aria-label="Version history"
+            title={versionCount > 0 ? `Version history (${versionCount})` : "Version history"}
+            onClick={onOpenHistory}
+            className="relative"
+          >
+            <History className="h-4 w-4" />
+            {versionCount > 0 && (
+              <span
+                className="absolute -top-0.5 -right-0.5 flex h-3.5 min-w-[14px] items-center justify-center rounded-full bg-[#1976d2] px-1 text-[9px] font-medium leading-none text-white"
+                aria-hidden
+              >
+                {versionCount}
+              </span>
+            )}
+          </CanvasToolButton>
           <span className="h-5 w-px bg-[#e5e9f0] dark:bg-[#333a47]" />
-          <CanvasToolButton aria-label="Run">
+          <CanvasToolButton
+            aria-label="Run"
+            disabled={viewOnly}
+            className={viewOnly ? "opacity-40 hover:bg-transparent hover:text-[#6b7280] dark:hover:bg-transparent dark:hover:text-[#9ba2b0]" : undefined}
+          >
             <Play className="h-4 w-4" />
           </CanvasToolButton>
         </div>
       </div>
+
+      {viewOnly && (
+        <div className="pointer-events-none absolute left-4 top-6 z-20 flex flex-col gap-2">
+          <span className="pointer-events-auto inline-flex h-8 items-center gap-1.5 rounded-full border border-[#e5e9f0] bg-white px-3 text-xs font-medium tracking-[-0.24px] text-[#6b7280] shadow-[0_1px_3px_rgba(15,23,42,0.06)] dark:border-[#333a47] dark:bg-[#1e2229] dark:text-[#9ba2b0]">
+            <Eye className="h-3.5 w-3.5" aria-hidden />
+            View only
+          </span>
+          {viewingVersion !== null && (
+            <div className="pointer-events-auto inline-flex h-8 items-center gap-2 rounded-full border border-[#dbeafe] bg-[#eff6ff] px-3 text-xs font-medium tracking-[-0.24px] text-[#1d4ed8] shadow-[0_1px_3px_rgba(15,23,42,0.06)] dark:border-[#1e3a8a] dark:bg-[#1e293b] dark:text-[#93c5fd]">
+              <Tag className="h-3 w-3" aria-hidden />
+              Viewing v{viewingVersion}
+              <button
+                type="button"
+                onClick={onReturnToDraft}
+                className="ml-1 inline-flex h-5 items-center rounded-full bg-white px-2 text-[11px] font-medium text-[#1d4ed8] hover:bg-[#dbeafe] dark:bg-[#1e2229] dark:text-[#93c5fd] dark:hover:bg-[#1e3a8a]"
+              >
+                Return to draft
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Pan/zoom transformed content. Anchored at canvas top-center via CSS so it
           stays centered between LHS/RHS exactly like the toolbar — panX is the user's
@@ -1958,7 +2830,7 @@ function WorkflowCanvas({
           transformOrigin: "50% 0",
           transition: transitioning ? "transform 280ms ease-out" : "none",
         }}
-        className="absolute left-1/2 top-0"
+        className={`absolute left-1/2 top-0 ${viewOnly ? "pointer-events-none opacity-90" : ""}`}
       >
         <div className="flex flex-col items-center">
         {/* Agent header — pill, smaller than the workflow cards */}
