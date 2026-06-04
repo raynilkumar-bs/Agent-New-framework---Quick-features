@@ -126,6 +126,18 @@
   display: none;
 }
 
+/** Voice preview — equalizer/waveform bars. Each bar reads its target peak
+ *  height from `--wave-base` (set inline per bar). */
+@keyframes wave-bar-pulse {
+  0%, 100% { transform: scaleY(0.35); }
+  50%      { transform: scaleY(1); }
+}
+.wave-bar {
+  height: var(--wave-base, 60%);
+  transform-origin: center;
+  animation: wave-bar-pulse 0.85s ease-in-out infinite;
+}
+
 :root {
   /* ─── Base scale ─── */
   --font-size: 13px;

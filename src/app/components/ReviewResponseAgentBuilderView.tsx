@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type DragEvent as ReactDragEvent } from "react";
+import { Fragment, forwardRef, useEffect, useLayoutEffect, useRef, useState, type DragEvent as ReactDragEvent } from "react";
 import {
   ArrowLeft,
   CloudUpload,
@@ -25,6 +25,7 @@ import {
   ArrowRight,
   ArrowDownToLine,
   Play,
+  Phone,
   Info,
   Zap,
   MoreVertical,
@@ -103,6 +104,13 @@ import { useRequestChromeless } from "@/app/context/ChromeContext";
 import { ContextPickerDialog } from "@/app/components/ContextPickerDialog";
 import { BranchConfigPanel } from "@/app/components/BranchConfigPanel";
 import { PreviewSettingsDialog } from "@/app/components/PreviewSettingsDialog";
+import { PreviewPanel, type PreviewMode } from "@/app/components/PreviewPanel";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/app/components/ui/dropdown-menu";
 import { toast } from "sonner";
 
 function TaskIcon({ className }: { className?: string }) {
@@ -401,6 +409,7 @@ export function ReviewResponseAgentBuilderView({ onBack }: Props) {
   const [stashedDraft, setStashedDraft] = useState<WorkflowSnapshot | null>(null);
   const [compareTarget, setCompareTarget] = useState<number | null>(null);
   const [restoreTarget, setRestoreTarget] = useState<number | null>(null);
+  const [previewMode, setPreviewMode] = useState<PreviewMode | null>(null);
   const [, setNowTick] = useState(0);
 
   const viewOnly = versionSheetOpen || viewingVersion !== null;
@@ -1028,6 +1037,7 @@ export function ReviewResponseAgentBuilderView({ onBack }: Props) {
                   handleCloseHistory();
                 } else {
                   setSelection(null);
+                  setPreviewMode(null);
                   setVersionSheetOpen(true);
                 }
               }}
@@ -1042,6 +1052,11 @@ export function ReviewResponseAgentBuilderView({ onBack }: Props) {
               }
               compareVersionNumber={compareTarget}
               onExitCompare={() => setCompareTarget(null)}
+              onOpenPreview={(mode) => {
+                setSelection(null);
+                setVersionSheetOpen(false);
+                setPreviewMode(mode);
+              }}
             />
           ) : (
           <div className="relative z-10 flex flex-1 flex-col items-center justify-center px-8 py-12 animate-in fade-in duration-300">
@@ -1130,7 +1145,15 @@ export function ReviewResponseAgentBuilderView({ onBack }: Props) {
           />
         )}
 
-        {!versionSheetOpen && creating && selectedTask ? (
+        {previewMode !== null && (
+          <PreviewPanel
+            key={`preview-${previewMode}`}
+            mode={previewMode}
+            onClose={() => setPreviewMode(null)}
+          />
+        )}
+
+        {previewMode === null && !versionSheetOpen && creating && selectedTask ? (
           <TaskConfigPanel
             key={`task-${selectedTask.id}`}
             taskKey={selectedTask.subId}
@@ -1144,7 +1167,7 @@ export function ReviewResponseAgentBuilderView({ onBack }: Props) {
             onPromptChange={(prompt) => updateTask(selectedTask.id, { prompt })}
             onClose={() => setSelection(null)}
           />
-        ) : !versionSheetOpen && creating && selectedBranch ? (
+        ) : previewMode === null && !versionSheetOpen && creating && selectedBranch ? (
           <BranchConfigPanel
             key={`branch-${selectedBranch.id}`}
             draft={{
@@ -1184,7 +1207,7 @@ export function ReviewResponseAgentBuilderView({ onBack }: Props) {
             }}
             onClose={() => setSelection(null)}
           />
-        ) : !versionSheetOpen && creating && selection?.kind === "trigger" && placedTrigger ? (
+        ) : previewMode === null && !versionSheetOpen && creating && selection?.kind === "trigger" && placedTrigger ? (
           <TriggerConfigPanel
             key={`trigger-${placedTrigger.subId}`}
             currentTypeId={placedTrigger.typeId}
@@ -1196,7 +1219,7 @@ export function ReviewResponseAgentBuilderView({ onBack }: Props) {
             onDescriptionChange={setTriggerDescription}
             onClose={() => setSelection(null)}
           />
-        ) : !versionSheetOpen && creating && selection?.kind === "agent" ? (
+        ) : previewMode === null && !versionSheetOpen && creating && selection?.kind === "agent" ? (
           <AgentDetailsPanel
             key="agent"
             name={title}
@@ -2368,6 +2391,7 @@ interface WorkflowCanvasProps {
   /** Version number being compared against (for the compare banner). */
   compareVersionNumber: number | null;
   onExitCompare: () => void;
+  onOpenPreview: (mode: PreviewMode) => void;
 }
 
 const CARD_WIDTH = "w-[360px]";
@@ -2414,6 +2438,7 @@ function WorkflowCanvas({
   compareSnapshot,
   compareVersionNumber,
   onExitCompare,
+  onOpenPreview,
 }: WorkflowCanvasProps) {
   const agentSelected = selection?.kind === "agent";
   const triggerSelected = selection?.kind === "trigger";
@@ -2898,13 +2923,34 @@ function WorkflowCanvas({
             )}
           </CanvasToolButton>
           <span className="h-5 w-px bg-[#e5e9f0] dark:bg-[#333a47]" />
-          <CanvasToolButton
-            aria-label="Run"
-            disabled={viewOnly}
-            className={viewOnly ? "opacity-40 hover:bg-transparent hover:text-[#6b7280] dark:hover:bg-transparent dark:hover:text-[#9ba2b0]" : undefined}
-          >
-            <Play className="h-4 w-4" />
-          </CanvasToolButton>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <CanvasToolButton
+                aria-label="Preview"
+                title="Preview"
+                disabled={viewOnly}
+                className={viewOnly ? "opacity-40 hover:bg-transparent hover:text-[#6b7280] dark:hover:bg-transparent dark:hover:text-[#9ba2b0]" : undefined}
+              >
+                <Play className="h-4 w-4" />
+              </CanvasToolButton>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-44">
+              <DropdownMenuItem
+                onClick={() => onOpenPreview("voice")}
+                className="cursor-pointer gap-2 text-[13px]"
+              >
+                <Phone className="h-3.5 w-3.5 text-[#6b7280] dark:text-[#9ba2b0]" />
+                Voice call
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => onOpenPreview("chat")}
+                className="cursor-pointer gap-2 text-[13px]"
+              >
+                <MessageSquare className="h-3.5 w-3.5 text-[#6b7280] dark:text-[#9ba2b0]" />
+                Web chat
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
@@ -3663,17 +3709,20 @@ function DropSlot({
   );
 }
 
-function CanvasToolButton({ children, className, ...rest }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
-  return (
-    <button
-      type="button"
-      className={`flex h-8 w-8 items-center justify-center rounded text-[#6b7280] transition-colors hover:bg-[#f4f6f7] hover:text-[#212121] disabled:cursor-not-allowed dark:text-[#9ba2b0] dark:hover:bg-[#262b35] dark:hover:text-[#f3f4f6] ${className ?? ""}`}
-      {...rest}
-    >
-      {children}
-    </button>
-  );
-}
+const CanvasToolButton = forwardRef<HTMLButtonElement, React.ButtonHTMLAttributes<HTMLButtonElement>>(
+  function CanvasToolButton({ children, className, ...rest }, ref) {
+    return (
+      <button
+        ref={ref}
+        type="button"
+        className={`flex h-8 w-8 items-center justify-center rounded text-[#6b7280] transition-colors hover:bg-[#f4f6f7] hover:text-[#212121] disabled:cursor-not-allowed dark:text-[#9ba2b0] dark:hover:bg-[#262b35] dark:hover:text-[#f3f4f6] ${className ?? ""}`}
+        {...rest}
+      >
+        {children}
+      </button>
+    );
+  },
+);
 
 interface AgentDetailsPanelProps {
   name: string;
